@@ -73,6 +73,12 @@ export default function TaskDetailModal({
     setDescDraft(task.description || "");
   }, [task.id, task.description]);
 
+  // chat message count -> compact layout
+  const [msgCount, setMsgCount] = useState(0);
+  const descShort = !(task.description && task.description.trim().length > 140);
+  const compact = msgCount === 0 && descShort; // shrink when empty-ish
+  const containerMaxH = compact ? "65vh" : "85vh"; // modal height cap
+
   const saveDesc = async () => {
     if (!isOwner || lockedForMe) return;
     await onChangeDescription?.(descDraft.trim());
@@ -89,7 +95,11 @@ export default function TaskDetailModal({
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl w-full max-w-4xl max-h-[85vh] overflow-hidden shadow">
+      {/* NOTE: flex column + inline maxHeight for dynamic shrink */}
+      <div
+        className="bg-white rounded-xl w-full max-w-4xl overflow-hidden shadow flex flex-col"
+        style={{ maxHeight: containerMaxH }}
+      >
         {/* Header with icons */}
         <div className="p-3 border-b flex items-center gap-2 justify-end">
           <IconButton title="Copy link" onClick={onCopyLink}>
@@ -117,9 +127,10 @@ export default function TaskDetailModal({
           </IconButton>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 h-[calc(85vh-56px)]">
-          {/* LEFT: title, description, comments */}
-          <div className="md:col-span-2 p-5 space-y-4 overflow-y-auto">
+        {/* Body: grid; when not compact it expands to fill (flex-1 min-h-0) */}
+        <div className={`grid grid-cols-1 md:grid-cols-3 gap-0 ${compact ? "" : "flex-1 min-h-0"}`}>
+          {/* LEFT: title, description, divider, chat */}
+          <div className={`md:col-span-2 p-5 ${compact ? "" : "h-full"} flex flex-col overflow-hidden`}>
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">{task.title}</h2>
               {task.locked && (
@@ -127,8 +138,8 @@ export default function TaskDetailModal({
               )}
             </div>
 
-            {/* Description */}
-            <div className="space-y-2">
+            {/* Description block */}
+            <div className="mt-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold">Description</h3>
                 {isOwner && !lockedForMe && !editingDesc && (
@@ -144,12 +155,12 @@ export default function TaskDetailModal({
               {editingDesc ? (
                 <>
                   <textarea
-                    className="w-full border rounded px-3 py-2 min-h-[120px]"
+                    className="mt-2 w-full border rounded px-3 py-2 min-h-[120px]"
                     value={descDraft}
                     onChange={(e) => setDescDraft(e.target.value)}
                     placeholder="Write a detailed description..."
                   />
-                  <div className="flex gap-2">
+                  <div className="mt-2 flex gap-2">
                     <button onClick={saveDesc} className="px-3 py-1 rounded bg-black text-white">
                       Save
                     </button>
@@ -170,16 +181,25 @@ export default function TaskDetailModal({
                   </div>
                 </>
               ) : task.description ? (
-                <p className="whitespace-pre-wrap text-gray-700">{task.description}</p>
+                <p className="mt-2 whitespace-pre-wrap text-gray-700">{task.description}</p>
               ) : (
-                <p className="text-sm text-gray-400 italic">No description</p>
+                <p className="mt-2 text-sm text-gray-400 italic">No description</p>
               )}
             </div>
 
-            {/* Comments */}
-            <div>
-              <h3 className="font-semibold mb-2">Comments</h3>
-              <TaskChat pid={pid} task={task} isOwner={isOwner} disabled={lockedForMe} />
+            {/* 1px divider */}
+            <div className="h-px bg-gray-200 my-4" />
+
+            {/* Chat – when not compact, it fills; when compact, it just sizes to content */}
+            <div className={compact ? "" : "flex-1 min-h-0"}>
+              <TaskChat
+                pid={pid}
+                task={task}
+                isOwner={isOwner}
+                disabled={lockedForMe}
+                className={compact ? "" : "h-full"}
+                onMessageCountChange={(n) => setMsgCount(n)}
+              />
             </div>
           </div>
 
@@ -252,7 +272,7 @@ export default function TaskDetailModal({
                   </dd>
                 </div>
 
-                {/* Priority — colored pill (same as board) */}
+                {/* Priority — colored pill */}
                 <div className="flex items-center justify-between gap-2">
                   <dt className="text-gray-500">Priority</dt>
                   <dd className="min-w-[12rem]">

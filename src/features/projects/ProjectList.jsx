@@ -1,66 +1,95 @@
-import { useState } from "react";
-import { useProjectStore } from "../../stores/project.store";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { collection, onSnapshot, doc, deleteDoc, orderBy, query } from "firebase/firestore";
+import { db } from "../../core/firebase";
 import { useAuthStore } from "../../stores/useAuthStore";
-import { Link, useNavigate } from "react-router-dom";
-import ProjectEditModal from "./ProjectEditModal";
-import ConfirmDialog from "../../components/ConfirmDialog";
+import ProjectCard from "./ProjectCard";
+
+/** normalize legacy statuses */
+function normalizeStatus(s) {
+  if (s === "todo") return "backlog";
+  if (s === "in_progress") return "develop";
+  return s || "backlog";
+}
 
 export default function ProjectList() {
-  const { projects, rename, remove } = useProjectStore();
-  const uid = useAuthStore(s=>s.user?.uid);
-  const nav = useNavigate();
+  const me = useAuthStore((s) => s.user);
+  const navigate = useNavigate();
 
-  const [editId, setEditId] = useState(null);
-  const [delId, setDelId] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [stats, setStats] = useState({}); // { [pid]: { total, byStatus } }
 
-  const project = projects.find(p=>p.id===editId);
+  // ✅ Watch ALL projects (no owner/member filter)
+  useEffect(() => {
+    const q = query(collection(db, "projects"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, (snap) => {
+      const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setProjects(all);
+    });
+    return () => unsub();
+  }, []);
 
-  if (!projects.length) return <p className="text-gray-500">No projects yet.</p>;
+  // Watch each project's tasks to compute status breakdown
+  useEffect(() => {
+    if (!projects.length) {
+      setStats({});
+      return;
+    }
+    const unsubs = [];
+    projects.forEach((p) => {
+      const u = onSnapshot(collection(db, "projects", p.id, "tasks"), (snap) => {
+        let total = 0;
+        const byStatus = { backlog: 0, analyze: 0, develop: 0, testing: 0, done: 0 };
+        snap.forEach((d) => {
+          const t = d.data();
+          total += 1;
+          const s = normalizeStatus(t.status);
+          if (byStatus[s] !== undefined) byStatus[s] += 1;
+        });
+        setStats((prev) => ({ ...prev, [p.id]: { total, byStatus } }));
+      });
+      unsubs.push(u);
+    });
+    return () => unsubs.forEach((u) => u && u());
+  }, [projects]);
+
+  const openProject = (id) => navigate(`/p/${id}`);
+
+  const deleteProject = async (id) => {
+    if (!window.confirm("Delete this project?")) return;
+    await deleteDoc(doc(db, "projects", id));
+  };
+
+  // Show "my" projects first for convenience, then alphabetical by title/name
+  const ordered = useMemo(() => {
+    return [...projects].sort((a, b) => {
+      const ao = a.owner === me?.uid ? -1 : 0;
+      const bo = b.owner === me?.uid ? -1 : 0;
+      if (ao !== bo) return ao - bo;
+      const at = (a.title || a.name || "").toLowerCase();
+      const bt = (b.title || b.name || "").toLowerCase();
+      return at.localeCompare(bt);
+    });
+  }, [projects, me?.uid]);
 
   return (
-    <>
-      <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {projects.map(p => {
-        const isOwner = uid === p.owner;
-        return (
-          <li
-            key={p.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => nav(`/p/${p.id}`)}
-            onKeyDown={(e)=> e.key==='Enter' && nav(`/p/${p.id}`)}
-            className="cursor-pointer border rounded-lg p-4 hover:shadow flex flex-col gap-2"
-          >
-            <div className="flex justify-between">
-              <h3 className="font-semibold">{p.name}</h3>
-              {isOwner && (
-                <div className="flex gap-2" onClick={(e)=>e.stopPropagation()}>
-                  <button onClick={()=>setEditId(p.id)} className="text-xs px-2 py-1 border rounded">Edit</button>
-                  <button onClick={()=>setDelId(p.id)} className="text-xs px-2 py-1 border rounded text-red-600">Delete</button>
-                </div>
-              )}
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-
-      {editId && project && (
-        <ProjectEditModal
-          initialName={project.name}
-          onSave={async (name)=>{ await rename(editId, name); setEditId(null); }}
-          onClose={()=>setEditId(null)}
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
+      {ordered.map((p) => (
+        <ProjectCard
+          key={p.id}
+          project={p}
+          taskStats={stats[p.id]}
+          onOpen={() => openProject(p.id)}           // clicking the whole card opens
+          onDelete={() => deleteProject(p.id)}       // owner-only icon shown in card
+          showDelete={p.owner === me?.uid}
         />
-      )}
+      ))}
 
-      {delId && (
-        <ConfirmDialog
-          title="Delete project?"
-          message="This will permanently remove the project and its tasks."
-          onCancel={()=>setDelId(null)}
-          onConfirm={async ()=>{ await remove(delId); setDelId(null); }}
-        />
+      {!ordered.length && (
+        <div className="col-span-full rounded-lg border bg-white p-8 text-center text-gray-500">
+          No projects found.
+        </div>
       )}
-    </>
+    </div>
   );
 }
