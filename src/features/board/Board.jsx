@@ -82,6 +82,11 @@ export default function Board() {
     setDetailTask(null);
   };
 
+  const cloneTask = async (t) => {
+    const { id, createdAt, updatedAt, ...rest } = t;
+    await create(projectId, { ...rest, title: `${t.title} (copy)` });
+  };
+
   // CRUD updates
   const saveForm = async (data) => {
     if (editModal?.id) await update(projectId, editModal.id, data);
@@ -204,6 +209,7 @@ const changeState = async (state, id) => {
           onClose={closeDetail}
           onDelete={() => deleteTask(detailTask)}
           onToggleLock={toggleLock}
+          onClone={() => cloneTask(detailTask)}
           onCopyLink={copyLink}
           onChangeStatus={changeStatus}
           onChangeAssignee={changeAssignee}

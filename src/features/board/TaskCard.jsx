@@ -1,39 +1,68 @@
-const statusColor = {
+import React from "react";
+
+const STATUS_COLOR = {
   backlog: "bg-gray-400",
   analyze: "bg-sky-400",
   develop: "bg-violet-500",
   testing: "bg-amber-500",
   done: "bg-green-500",
 };
-const statusLabel = {
+const STATUS_LABEL = {
   backlog: "Backlog",
   analyze: "Analyze",
   develop: "Develop",
   testing: "Testing",
   done: "Done",
 };
-const stateLabel = {
+
+const STATE_LABEL = {
   new: "New",
   active: "Active",
   review: "Review",
   blocked: "Blocked",
   closed: "Closed",
 };
-const priorityLabel = { low: "Low", med: "Medium", high: "High" };
 
-function AssigneeAvatar({ user }) {
-  if (user?.photoURL) return <img alt="" src={user.photoURL} className="w-5 h-5 rounded-full" />;
-  const letter = (user?.displayName || user?.email || "?")[0]?.toUpperCase?.() || "?";
+const PRIORITY_LABEL = { low: "Low", med: "Medium", high: "High" };
+const PRIORITY_STYLES = {
+  low:  "bg-green-100 text-green-700 border-green-200",
+  med:  "bg-amber-100 text-amber-700 border-amber-200",
+  high: "bg-rose-100 text-rose-700 border-rose-200",
+};
+
+function normalizeString(val, allowed, fallback) {
+  // allow plain strings; if object like {value: "..."} grab .value; otherwise fallback
+  let out = typeof val === "string" ? val : (val && val.value) || "";
+  if (!allowed.includes(out)) out = fallback;
+  return out;
+}
+
+// replace your AssigneeAvatar with this version
+function AssigneeAvatar({ user, size = "md" }) {
+  const S = {
+    sm: { box: "w-5 h-5", txt: "text-[10px]" },  // 20px
+    md: { box: "w-7 h-7", txt: "text-[12px]" },  // 28px
+    lg: { box: "w-9 h-9", txt: "text-[14px]" },  // 36px
+  }[size];
+
+  if (user?.photoURL) {
+    return <img alt="" src={user.photoURL} className={`${S.box} rounded-full object-cover`} />;
+  }
+
+  const letter = (user?.displayName || user?.email || "?").toString().trim().charAt(0).toUpperCase();
   return (
-    <div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-semibold">
+    <div
+      className={`${S.box} rounded-full bg-gray-200 flex items-center justify-center font-semibold ${S.txt}`}
+    >
       {letter}
     </div>
   );
 }
 
+
 export default function TaskCard({
   task,
-  members,
+  members = [],
   meUid,
   isOwner,
   isMemberMe,
@@ -43,90 +72,144 @@ export default function TaskCard({
   onChangeStatus,
   onChangePriority,
 }) {
+  // ---- Normalize values to strings (prevents React from seeing objects in JSX)
+  const statusValue  = normalizeString(task.status,  ["backlog","analyze","develop","testing","done"], "backlog");
+  const stateValue   = normalizeString(task.state,   ["new","active","review","blocked","closed"], "new");
+  const priorityValue= normalizeString(task.priority,["low","med","high"], "low");
+
+  const priorityClass = PRIORITY_STYLES[priorityValue] || PRIORITY_STYLES.med;
+  const priorityText  = PRIORITY_LABEL[priorityValue];
+
+  // assignee lookup
   const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
   const assigneeUser = task.assignee ? memberMap[task.assignee] : null;
+  const assigneeText =
+    assigneeUser?.displayName || assigneeUser?.email || "Unassigned";
 
-  const canChangeStatus = !task.locked && (isOwner || (isMemberMe && meUid === task.assignee));
-  const canChangeState = !task.locked && isOwner;
+  // permissions
+  const canChangeStatus   = !task.locked && (isOwner || (isMemberMe && meUid === task.assignee));
+  const canChangeState    = !task.locked && isOwner;
   const canChangePriority = !task.locked && isOwner;
 
-  return (
-    <div className="relative border rounded-lg bg-white shadow-sm p-3 cursor-pointer" onClick={onOpen}>
-      {/* left color stripe */}
-      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${statusColor[task.status] || "bg-gray-300"}`} />
+  const accent = STATUS_COLOR[statusValue] || "bg-gray-300";
 
-      {/* title + priority badge */}
-      <div className="flex justify-between items-start">
-        <h4 className="font-medium">{task.title}</h4>
-        <span className="text-[10px] px-2 py-0.5 rounded bg-gray-100 capitalize">{task.priority}</span>
+  const handleOpen = () => onOpen && onOpen(task);
+
+  const handleChangeState = (v) => {
+    // call both styles for compatibility
+    onChangeState && onChangeState(task, v);
+    onChangeState && onChangeState(v);
+  };
+  const handleChangeStatus = (v) => {
+    onChangeStatus && onChangeStatus(task, v);
+    onChangeStatus && onChangeStatus(v);
+  };
+  const handleChangePriority = (v) => {
+    onChangePriority && onChangePriority(task, v);
+    onChangePriority && onChangePriority(v);
+  };
+
+  return (
+    <div
+      className="relative border rounded-lg bg-white shadow-sm p-3 cursor-pointer"
+      onClick={handleOpen}
+    >
+      {/* left color stripe */}
+      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${accent}`} />
+
+      {/* title + priority pill */}
+      <div className="flex justify-between items-start gap-3">
+        <h4 className="font-medium break-words pr-2">{String(task.title || "")}</h4>
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded border ${priorityClass}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {priorityText}
+        </span>
       </div>
 
       {/* description preview */}
-      {task.description && (
-        <p className="text-[12px] text-gray-600 line-clamp-3 mt-1">{task.description}</p>
+      {task.description ? (
+        <p
+          className="text-[12px] text-gray-600 mt-3 break-words"
+          style={{
+            display: "-webkit-box",
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {String(task.description)}
+        </p>
+      ) : (
+        <p className="text-[12px] text-gray-400 mt-2 italic">No description</p>
       )}
 
-      {/* assignee row (NO state/status here) */}
-      <div className="flex items-center gap-2 mt-2 text-xs text-gray-600">
+      {/* assignee */}
+      <div className="flex items-center gap-2 mt-6 text-xs text-gray-700">
         <AssigneeAvatar user={assigneeUser} />
-        <span className="truncate">{assigneeUser?.displayName || assigneeUser?.email || "Unassigned"}</span>
+        <span className="truncate text-sm">{assigneeText}</span>
       </div>
 
-      {/* footer actions */}
-      <div className="mt-2 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
-        {/* bottom-left: State / Status / Priority */}
-        <div className="flex gap-2 items-center">
-          {/* State (owner only) */}
-          {canChangeState ? (
-            <select
-              className="text-xs border rounded px-2 py-1 bg-white"
-              value={task.state || "new"}
-              onChange={(e) => onChangeState(e.target.value)}
-            >
-              <option value="new">New</option>
-              <option value="active">Active</option>
-              <option value="review">Review</option>
-              <option value="blocked">Blocked</option>
-              <option value="closed">Closed</option>
-            </select>
-          ) : (
-            <span className="text-xs text-gray-600">State: {stateLabel[task.state] || task.state || "New"}</span>
-          )}
+      {/* footer controls */}
+      <div
+        className="mt-3 flex flex-wrap items-center gap-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* State */}
+        {canChangeState ? (
+          <select
+            className="text-xs border rounded px-2 py-1 bg-white"
+            value={stateValue}
+            onChange={(e) => handleChangeState(e.target.value)}
+          >
+            <option value="new">New</option>
+            <option value="active">Active</option>
+            <option value="review">Review</option>
+            <option value="blocked">Blocked</option>
+            <option value="closed">Closed</option>
+          </select>
+        ) : (
+          <span className="text-xs text-gray-600">
+            State: {STATE_LABEL[stateValue]}
+          </span>
+        )}
 
-          {/* Status (owner or assignee) */}
-          {canChangeStatus ? (
-            <select
-              className="text-xs border rounded px-2 py-1 bg-white"
-              value={task.status}
-              onChange={(e) => onChangeStatus(e.target.value)}
-            >
-              <option value="backlog">Backlog</option>
-              <option value="analyze">Analyze</option>
-              <option value="develop">Develop</option>
-              <option value="testing">Testing</option>
-              <option value="done">Done</option>
-            </select>
-          ) : (
-            <span className="text-xs text-gray-600">Status: {statusLabel[task.status] || task.status}</span>
-          )}
+        {/* Status */}
+        {canChangeStatus ? (
+          <select
+            className="text-xs border rounded px-2 py-1 bg-white"
+            value={statusValue}
+            onChange={(e) => handleChangeStatus(e.target.value)}
+          >
+            <option value="backlog">Backlog</option>
+            <option value="analyze">Analyze</option>
+            <option value="develop">Develop</option>
+            <option value="testing">Testing</option>
+            <option value="done">Done</option>
+          </select>
+        ) : (
+          <span className="text-xs text-gray-600">
+            Status: {STATUS_LABEL[statusValue]}
+          </span>
+        )}
 
-          {/* Priority (owner only) */}
-          {canChangePriority ? (
-            <select
-              className="text-xs border rounded px-2 py-1 bg-white"
-              value={task.priority}
-              onChange={(e) => onChangePriority(e.target.value)}
-            >
-              <option value="low">Low</option>
-              <option value="med">Medium</option>
-              <option value="high">High</option>
-            </select>
-          ) : (
-            <span className="text-xs text-gray-600">
-              Priority: {priorityLabel[task.priority] ?? task.priority}
-            </span>
-          )}
-        </div>
+        {/* Priority */}
+        {canChangePriority ? (
+          <select
+            className="text-xs border rounded px-2 py-1 bg-white"
+            value={priorityValue}
+            onChange={(e) => handleChangePriority(e.target.value)}
+          >
+            <option value="low">Low</option>
+            <option value="med">Medium</option>
+            <option value="high">High</option>
+          </select>
+        ) : (
+          <span className="text-xs text-gray-600">
+            Priority: {PRIORITY_LABEL[priorityValue]}
+          </span>
+        )}
       </div>
     </div>
   );

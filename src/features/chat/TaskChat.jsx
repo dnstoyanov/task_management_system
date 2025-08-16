@@ -1,7 +1,33 @@
 import { useEffect, useState } from "react";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, updateDoc, deleteDoc } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  orderBy,
+  serverTimestamp,
+  doc,
+  updateDoc,
+  deleteDoc,
+} from "firebase/firestore";
 import { db } from "../../core/firebase";
 import { useAuthStore } from "../../stores/useAuthStore";
+import { Pencil, Trash2 } from "lucide-react";
+
+/* Tiny icon button */
+function IconButton({ title, onClick, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="inline-flex items-center justify-center h-7 w-7 border rounded hover:bg-gray-100"
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function TaskChat({ pid, task, isOwner = false, disabled = false }) {
   const me = useAuthStore((s) => s.user);
@@ -31,7 +57,7 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
     try {
       await addDoc(colRef, {
         uid: me.uid,
-        author: me.displayName || me.email || me.uid, // convenience for display
+        author: me.displayName || me.email || me.uid,
         text: t,
         createdAt: serverTimestamp(),
       });
@@ -70,7 +96,8 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
     }
   }
 
-  const canEditOrDelete = (m) => m.uid === me?.uid || isOwner;
+  // Author OR project owner can edit/delete (and not when disabled)
+  const canEditOrDelete = (m) => (m.uid === me?.uid || isOwner) && !disabled;
 
   return (
     <div className="rounded border">
@@ -86,25 +113,21 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
                 <div className="text-sm font-medium">
                   {m.author || m.uid}
                   <span className="ml-2 text-xs text-gray-400">{ts}</span>
-                  {edited && <span className="ml-1 text-xs text-gray-400">(edited)</span>}
+                  {edited && (
+                    <span className="ml-1 text-xs text-gray-400">(edited)</span>
+                  )}
                 </div>
 
-                {canEditOrDelete(m) && !disabled && (
+                {canEditOrDelete(m) && (
                   <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
                     {editingId !== m.id && (
-                      <button
-                        className="text-xs px-2 py-0.5 border rounded"
-                        onClick={() => beginEdit(m)}
-                      >
-                        Edit
-                      </button>
+                      <IconButton title="Edit message" onClick={() => beginEdit(m)}>
+                        <Pencil size={14} />
+                      </IconButton>
                     )}
-                    <button
-                      className="text-xs px-2 py-0.5 border rounded text-red-600"
-                      onClick={() => remove(m.id)}
-                    >
-                      Delete
-                    </button>
+                    <IconButton title="Delete message" onClick={() => remove(m.id)}>
+                      <Trash2 size={14} className="text-red-600" />
+                    </IconButton>
                   </div>
                 )}
               </div>
@@ -118,12 +141,18 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
                     onKeyDown={(e) => e.key === "Enter" && saveEdit(m.id)}
                     autoFocus
                   />
-                  <button className="px-3 py-1 rounded bg-black text-white" onClick={() => saveEdit(m.id)}>
+                  <button
+                    className="px-3 py-1 rounded bg-black text-white"
+                    onClick={() => saveEdit(m.id)}
+                  >
                     Save
                   </button>
                   <button
                     className="px-3 py-1 rounded border"
-                    onClick={() => { setEditingId(null); setEditText(""); }}
+                    onClick={() => {
+                      setEditingId(null);
+                      setEditText("");
+                    }}
                   >
                     Cancel
                   </button>
@@ -135,7 +164,9 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
           );
         })}
 
-        {!messages.length && <p className="text-sm text-gray-400">No comments yet.</p>}
+        {!messages.length && (
+          <p className="text-sm text-gray-400">No comments yet.</p>
+        )}
       </div>
 
       {/* composer */}
