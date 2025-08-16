@@ -1,4 +1,5 @@
 import React from "react";
+import { MoreVertical } from "lucide-react";
 
 const STATUS_COLOR = {
   backlog: "bg-gray-400",
@@ -14,7 +15,6 @@ const STATUS_LABEL = {
   testing: "Testing",
   done: "Done",
 };
-
 const STATE_LABEL = {
   new: "New",
   active: "Active",
@@ -22,18 +22,16 @@ const STATE_LABEL = {
   blocked: "Blocked",
   closed: "Closed",
 };
-
 const PRIORITY_LABEL = { low: "Low", med: "Medium", high: "High" };
 const PRIORITY_STYLES = {
-  low:  "bg-green-100 text-green-700 border-green-200",
-  med:  "bg-amber-100 text-amber-700 border-amber-200",
+  low: "bg-green-100 text-green-700 border-green-200",
+  med: "bg-amber-100 text-amber-700 border-amber-200",
   high: "bg-rose-100 text-rose-700 border-rose-200",
 };
 
 function normalizeString(val, allowed, fallback) {
-  let out = typeof val === "string" ? val : (val && val.value) || "";
-  if (!allowed.includes(out)) out = fallback;
-  return out;
+  const out = typeof val === "string" ? val : (val && val.value) || "";
+  return allowed.includes(out) ? out : fallback;
 }
 
 function AssigneeAvatar({ user, size = "md" }) {
@@ -44,9 +42,15 @@ function AssigneeAvatar({ user, size = "md" }) {
   }[size];
 
   if (user?.photoURL) {
-    return <img alt="" src={user.photoURL} className={`${S.box} rounded-full object-cover`} />;
+    return (
+      <img alt="" src={user.photoURL} className={`${S.box} rounded-full object-cover`} />
+    );
   }
-  const letter = (user?.displayName || user?.email || "?").toString().trim().charAt(0).toUpperCase();
+  const letter = (user?.displayName || user?.email || "?")
+    .toString()
+    .trim()
+    .charAt(0)
+    .toUpperCase();
   return (
     <div className={`${S.box} rounded-full bg-gray-200 flex items-center justify-center font-semibold ${S.txt}`}>
       {letter}
@@ -60,50 +64,96 @@ export default function TaskCard({
   meUid,
   isOwner,
   isMemberMe,
+  canMove,                 // <-- from Column (optional)
   onOpen,
   onDelete,
   onChangeState,
   onChangeStatus,
   onChangePriority,
+  variant = "board",
 }) {
-  const statusValue   = normalizeString(task.status,  ["backlog","analyze","develop","testing","done"], "backlog");
-  const stateValue    = normalizeString(task.state,   ["new","active","review","blocked","closed"], "new");
-  const priorityValue = normalizeString(task.priority,["low","med","high"], "low");
+  const statusValue = normalizeString(
+    task.status, ["backlog", "analyze", "develop", "testing", "done"], "backlog"
+  );
+  const stateValue = normalizeString(
+    task.state, ["new", "active", "review", "blocked", "closed"], "new"
+  );
+  const priorityValue = normalizeString(
+    task.priority, ["low", "med", "high"], "low"
+  );
 
   const priorityClass = PRIORITY_STYLES[priorityValue] || PRIORITY_STYLES.med;
-  const priorityText  = PRIORITY_LABEL[priorityValue];
+  const priorityText = PRIORITY_LABEL[priorityValue];
 
   const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
   const assigneeUser = task.assignee ? memberMap[task.assignee] : null;
   const assigneeText = assigneeUser?.displayName || assigneeUser?.email || "Unassigned";
 
-  const canChangeStatus   = !task.locked && (isOwner || (isMemberMe && meUid === task.assignee));
-  const canChangeState    = !task.locked && isOwner;
+  // Compute default move permission if prop not provided
+  const canMoveComputed =
+    canMove ??
+    (!task.locked && (isOwner || (isMemberMe && meUid === task.assignee)));
+
+  const canChangeStatus =
+    !task.locked && (isOwner || (isMemberMe && meUid === task.assignee));
+  const canChangeState = !task.locked && isOwner;
   const canChangePriority = !task.locked && isOwner;
 
   const accent = STATUS_COLOR[statusValue] || "bg-gray-300";
 
   return (
-    <div className="relative border rounded-lg bg-white shadow-sm p-3 cursor-pointer" onClick={() => onOpen?.(task)}>
-      {/* left accent */}
+    <div
+      className="relative border rounded-lg bg-white shadow-sm p-3 cursor-pointer"
+      onClick={() => onOpen?.(task)}
+    >
       <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${accent}`} />
 
-      {/* title + priority pill */}
-      <div className="flex justify-between items-start gap-3">
-        <h4 className="font-medium break-words pr-2">{String(task.title || "")}</h4>
-        <span
-          className={`text-[10px] px-2 py-0.5 text-sm rounded border ${priorityClass}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {priorityText}
-        </span>
-      </div>
+      {/* Header with conditional dots */}
+      {variant === "board" ? (
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0 pr-2">
+            <h4 className="font-medium break-words">{String(task.title || "")}</h4>
+            <span
+              className={`shrink-0 text-[11px] px-2 py-0.5 rounded border ${priorityClass}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {priorityText}
+            </span>
+          </div>
 
-      {/* description */}
+          {/* Show dots ONLY if user can move the card */}
+          {canMoveComputed && (
+            <span
+              className="shrink-0 p-1 rounded text-gray-500 cursor-grab select-none"
+              title="Drag"
+              aria-hidden="true"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreVertical size={16} />
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="flex justify-between items-start gap-3">
+          <h4 className="font-medium break-words pr-2">{String(task.title || "")}</h4>
+          <span
+            className={`text-[11px] px-2 py-0.5 rounded border ${priorityClass}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {priorityText}
+          </span>
+        </div>
+      )}
+
       {task.description ? (
         <p
           className="text-[12px] text-gray-600 mt-3 break-words"
-          style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+          style={{
+            display: "-webkit-box",
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
         >
           {String(task.description)}
         </p>
@@ -111,13 +161,11 @@ export default function TaskCard({
         <p className="text-[12px] text-gray-400 mt-2 italic">No description</p>
       )}
 
-      {/* assignee */}
       <div className="flex items-center gap-2 mt-6 text-xs text-gray-700">
         <AssigneeAvatar user={assigneeUser} />
         <span className="truncate text-sm">{assigneeText}</span>
       </div>
 
-      {/* footer controls */}
       <div className="mt-3 flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
         {canChangeState ? (
           <select

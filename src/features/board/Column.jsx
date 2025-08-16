@@ -1,4 +1,3 @@
-// src/app/features/board/Column.jsx
 import { Droppable, Draggable } from "@hello-pangea/dnd";
 import TaskCard from "./TaskCard";
 
@@ -16,10 +15,9 @@ export default function Column({
   onChangeState,
   onChangeStatus,
   onChangePriority,
-  canDragOrChangeStatus, // fn(task) -> boolean
+  // Optional gate: (task) => boolean
+  canDragOrChangeStatus,
 }) {
-  const canDragFn = canDragOrChangeStatus || (() => true);
-
   return (
     <div className="bg-gray-50 rounded-xl border p-4">
       <div className="flex items-center justify-between mb-3">
@@ -43,37 +41,45 @@ export default function Column({
               dropSnapshot.isDraggingOver ? "bg-blue-50" : ""
             } rounded-md p-1 transition`}
           >
-            {tasks.map((t, index) => (
-              <Draggable
-                key={t.id}
-                draggableId={t.id}
-                index={index}
-                isDragDisabled={!canDragFn(t)}
-              >
-                {(dragProvided, dragSnapshot) => (
-                  <div
-                    ref={dragProvided.innerRef}
-                    {...dragProvided.draggableProps}
-                    {...dragProvided.dragHandleProps}
-                    className={dragSnapshot.isDragging ? "rotate-[0.2deg]" : ""}
-                  >
-                    <TaskCard
-                      task={t}
-                      members={members}
-                      status={status}
-                      meUid={meUid}
-                      isOwner={isOwner}
-                      isMemberMe={isMemberMe}
-                      onOpen={() => onOpen(t)}
-                      onDelete={() => onDelete(t)}
-                      onChangeState={(v) => onChangeState(t, v)}
-                      onChangeStatus={(v) => onChangeStatus(t, v)}
-                      onChangePriority={(v) => onChangePriority(t, v)}
-                    />
-                  </div>
-                )}
-              </Draggable>
-            ))}
+            {tasks.map((t, index) => {
+              const canMove = canDragOrChangeStatus
+                ? canDragOrChangeStatus(t)
+                : true; // default allow
+
+              return (
+                <Draggable
+                  key={t.id}
+                  draggableId={t.id}
+                  index={index}
+                  isDragDisabled={!canMove}
+                >
+                  {(dragProvided, dragSnapshot) => (
+                    <div
+                      ref={dragProvided.innerRef}
+                      // WHOLE CARD is the drag handle
+                      {...dragProvided.draggableProps}
+                      {...dragProvided.dragHandleProps}
+                      className={dragSnapshot.isDragging ? "rotate-[0.2deg]" : ""}
+                    >
+                      <TaskCard
+                        variant="board"
+                        task={t}
+                        members={members}
+                        meUid={meUid}
+                        isOwner={isOwner}
+                        isMemberMe={isMemberMe}
+                        canMove={canMove}               
+                        onOpen={() => onOpen(t)}
+                        onDelete={() => onDelete(t)}
+                        onChangeState={(v) => onChangeState(t, v)}
+                        onChangeStatus={(v) => onChangeStatus(t, v)}
+                        onChangePriority={(v) => onChangePriority(t, v)}
+                      />
+                    </div>
+                  )}
+                </Draggable>
+              );
+            })}
             {dropProvided.placeholder}
           </div>
         )}
