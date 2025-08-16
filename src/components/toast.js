@@ -1,6 +1,7 @@
+// src/components/toast.js
 import { toast } from "react-toastify";
 
-const defaultOpts = {
+const defaults = {
   position: "top-right",
   autoClose: 4000,
   hideProgressBar: false,
@@ -11,21 +12,19 @@ const defaultOpts = {
 };
 
 export const notify = {
-  success: (msg, opts) => toast.success(msg, { ...defaultOpts, ...opts }),
-  error:   (msg, opts) => toast.error(msg,   { ...defaultOpts, ...opts }),
-  info:    (msg, opts) => toast.info(msg,    { ...defaultOpts, ...opts }),
+  success: (msg, opts) => toast.success(msg, { ...defaults, ...opts }),
+  error:   (msg, opts) => toast.error(msg,   { ...defaults, ...opts }),
+  info:    (msg, opts) => toast.info(msg,    { ...defaults, ...opts }),
 };
 
-/**
- * Call this in every catch() for Firestore calls.
- * It interprets common Firestore errors and shows a consistent toast.
- */
+/** Centralized Firestore error messaging */
 export function handleFirestoreError(e, fallback = "Something went wrong.") {
   const code = e?.code || "";
   const msg  = e?.message || "";
 
   if (code === "permission-denied" || /insufficient permissions/i.test(msg)) {
     notify.error("You don’t have permission to perform this action.");
+    if (process.env.NODE_ENV !== "production") console.warn(e);
     return;
   }
   if (code === "unauthenticated") {
@@ -49,10 +48,7 @@ export function handleFirestoreError(e, fallback = "Something went wrong.") {
   if (process.env.NODE_ENV !== "production") console.error(e);
 }
 
-/**
- * Optional helper to wrap async service calls.
- * Usage: await guarded(() => update(...), "Saved");
- */
+/** Optional wrapper to reduce try/catch noise */
 export async function guarded(fn, successMsg) {
   try {
     const res = await fn();

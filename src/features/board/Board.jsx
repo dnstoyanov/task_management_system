@@ -1,6 +1,8 @@
+// src/features/board/Board.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { DragDropContext } from "@hello-pangea/dnd";
+
 import { useTaskStore } from "../../stores/task.store";
 import { useAuthStore } from "../../stores/useAuthStore";
 import TaskDetailModal from "./TaskDetailModal";
@@ -8,6 +10,7 @@ import TaskModal from "./TaskModal";
 import Column from "./Column";
 import { ProjectService } from "../../core/services/project.service";
 import { UserService } from "../../core/services/user.service";
+import { handleFirestoreError, notify } from "../../components/toast";
 
 const normalizeStatus = (s) =>
   s === "todo" ? "backlog" : s === "in_progress" ? "develop" : s;
@@ -26,7 +29,7 @@ export default function Board() {
   const [editModal, setEditModal] = useState(null);
   const [detailTask, setDetailTask] = useState(null);
 
-  // wait for auth before starting listeners
+  // listeners
   useEffect(() => {
     if (!me) return;
     start(projectId);
@@ -48,7 +51,7 @@ export default function Board() {
   const isOwner = !!(project && me && project.owner === me.uid);
   const isMemberMe = !!(project?.members || []).includes(me?.uid);
 
-  // deep-link (?t=taskId)
+  // deep-link (?t=id)
   useEffect(() => {
     const q = new URLSearchParams(location.search);
     const tid = q.get("t");
@@ -57,15 +60,15 @@ export default function Board() {
     if (t) setDetailTask(t);
   }, [location.search, tasks]);
 
-  // group tasks by normalized status
+  // derived buckets
   const byStatus = useMemo(() => {
     const list = tasks.map((t) => ({ ...t, status: normalizeStatus(t.status) }));
     return {
-      backlog: list.filter((t) => t.status === "backlog").sort((a,b)=>(a.order??0)-(b.order??0)),
-      analyze: list.filter((t) => t.status === "analyze").sort((a,b)=>(a.order??0)-(b.order??0)),
-      develop: list.filter((t) => t.status === "develop").sort((a,b)=>(a.order??0)-(b.order??0)),
-      testing: list.filter((t) => t.status === "testing").sort((a,b)=>(a.order??0)-(b.order??0)),
-      done:    list.filter((t) => t.status === "done").sort((a,b)=>(a.order??0)-(b.order??0)),
+      backlog: list.filter((t) => t.status === "backlog").sort((a,b)=> (a.order||0)-(b.order||0)),
+      analyze: list.filter((t) => t.status === "analyze").sort((a,b)=> (a.order||0)-(b.order||0)),
+      develop: list.filter((t) => t.status === "develop").sort((a,b)=> (a.order||0)-(b.order||0)),
+      testing: list.filter((t) => t.status === "testing").sort((a,b)=> (a.order||0)-(b.order||0)),
+      done:    list.filter((t) => t.status === "done").sort((a,b)=> (a.order||0)-(b.order||0)),
     };
   }, [tasks]);
 
@@ -84,96 +87,160 @@ export default function Board() {
   };
 
   const cloneTask = async (t) => {
-    const { id, createdAt, updatedAt, ...rest } = t;
-    await create(projectId, { ...rest, title: `${t.title} (copy)`, order: Date.now() });
+    try {
+      const { id, createdAt, updatedAt, ...rest } = t;
+      await create(projectId, { ...rest, title: `${t.title} (copy)` });
+      notify.success("Task cloned.");
+    } catch (e) {
+      handleFirestoreError(e, "Couldn’t clone the task.");
+    }
   };
 
-  // CRUD helpers
+  // CRUD with toasts
   const saveForm = async (data) => {
-    if (editModal?.id) await update(projectId, editModal.id, data);
-    else await create(projectId, { ...data, status: editModal.status || "backlog", order: Date.now() });
-    setEditModal(null);
+    try {
+      if (editModal?.id) {
+        await update(projectId, editModal.id, data);
+        notify.success("Task updated.");
+      } else {
+        await create(projectId, { ...data, status: editModal.status || "backlog", order: Date.now() });
+        notify.success("Task created.");
+      }
+      setEditModal(null);
+    } catch (e) {
+      handleFirestoreError(e, "Couldn’t save the task.");
+    }
   };
-  const deleteTask = async (task) => { await remove(projectId, task.id); if (detailTask?.id === task.id) closeDetail(); };
-  const toggleLock = async () => { if (!detailTask) return; await update(projectId, detailTask.id, { locked: !detailTask.locked }); };
-  const changeStatus = async (status) => { if (!detailTask) return; await update(projectId, detailTask.id, { status }); };
-  const changeAssignee = async (assignee) => { if (!detailTask) return; await update(projectId, detailTask.id, { assignee: assignee || null }); };
-  const changePriority = async (priority) => { if (!detailTask) return; await update(projectId, detailTask.id, { priority }); };
-  const changeDescription = async (description) => { if (!detailTask) return; await update(projectId, detailTask.id, { description }); };
 
-  const changePriorityQuick = async (priority, id) => { await update(projectId, id, { priority }); };
+  const deleteTask = async (task) => {
+    try {
+      await remove(projectId, task.id);
+      notify.success("Task deleted.");
+      if (detailTask?.id === task.id) closeDetail();
+    } catch (e) {
+      handleFirestoreError(e, "Couldn’t delete the task.");
+    }
+  };
 
+  const toggleLock = async () => {
+    try {
+      if (!detailTask) return;
+      await update(projectId, detailTask.id, { locked: !detailTask.locked });
+      notify.success(detailTask.locked ? "Task unlocked." : "Task locked.");
+    } catch (e) {
+      handleFirestoreError(e, "Couldn’t change lock state.");
+    }
+  };
+
+  const changeStatus = async (status) => {
+    try {
+      if (!detailTask) return;
+      await update(projectId, detailTask.id, { status });
+    } catch (e) {
+      handleFirestoreError(e, "You can’t change the status.");
+    }
+  };
+
+  const changeAssignee = async (assignee) => {
+    try {
+      if (!detailTask) return;
+      await update(projectId, detailTask.id, { assignee: assignee || null });
+    } catch (e) {
+      handleFirestoreError(e, "You can’t change the assignee.");
+    }
+  };
+
+  const changePriority = async (priority) => {
+    try {
+      if (!detailTask) return;
+      await update(projectId, detailTask.id, { priority });
+    } catch (e) {
+      handleFirestoreError(e, "You can’t change the priority.");
+    }
+  };
+
+  const changeDescription = async (description) => {
+    try {
+      if (!detailTask) return;
+      await update(projectId, detailTask.id, { description });
+      notify.success("Description updated.");
+    } catch (e) {
+      handleFirestoreError(e, "Couldn’t update the description.");
+    }
+  };
+
+  const canChangePriority = (t) => !t.locked && isOwner;
+  const canChangeStatus = (t) => !t.locked && (isOwner || me?.uid === t.assignee);
+  const canChangeState  = (t) => !t.locked && isOwner;
+
+  const changePriorityQuick = async (priority, id) => {
+    try { await update(projectId, id, { priority }); }
+    catch (e) { handleFirestoreError(e, "You can’t change the priority."); }
+  };
   const changeStatusQuick = async (status, id) => {
     try { await update(projectId, id, { status }); }
-    catch (e) { console.error("[status update failed]", e); }
+    catch (e) { handleFirestoreError(e, "You can’t move this task."); }
   };
-
   const changeState = async (state, id) => {
     try { await update(projectId, id, { state }); }
-    catch (e) { console.error("[state update failed]", e); }
+    catch (e) { handleFirestoreError(e, "You can’t change the state."); }
   };
 
   const copyLink = async () => {
     if (!detailTask) return;
     const url = `${window.location.origin}/p/${projectId}?t=${detailTask.id}`;
-    try { await navigator.clipboard.writeText(url); alert("Link copied"); } catch { alert(url); }
+    try { await navigator.clipboard.writeText(url); notify.success("Link copied."); }
+    catch { notify.info(url); }
   };
 
-  const canChangeStatus = (t) => !t.locked && (isOwner || me?.uid === t.assignee);
-  const canChangeState  = (t) => !t.locked && isOwner;
-  const canDragOrChangeStatus = (t) => canChangeStatus(t); // for Column/Draggable
-
-  // --- DND: compute a nice "order" number based on neighbors
-  function calcNewOrder(destList, insertIndex) {
-    const prev = destList[insertIndex - 1]?.order;
-    const next = destList[insertIndex]?.order;
-    const now = Date.now();
-    if (prev != null && next != null) return (prev + next) / 2;
-    if (prev != null) return prev + 1;
-    if (next != null) return next - 1;
-    return now; // empty list fallback
-  }
-
-  const onDragEnd = async (result) => {
+  // ---- DND: the missing provider fix ----
+  async function onDragEnd(result) {
     const { destination, source, draggableId } = result;
     if (!destination) return;
 
-    const from = source.droppableId;      // "backlog" | "analyze" | ...
-    const to   = destination.droppableId; // same
-    const samePlace = from === to && destination.index === source.index;
-    if (samePlace) return;
+    const srcCol = source.droppableId;
+    const dstCol = destination.droppableId;
+    const srcIdx = source.index;
+    const dstIdx = destination.index;
 
-    const moved = tasks.find(t => t.id === draggableId);
+    // same place
+    if (srcCol === dstCol && srcIdx === dstIdx) return;
+
+    // Find moved task
+    const moved =
+      (byStatus[srcCol] || []).find((t, i) => i === srcIdx) ||
+      tasks.find((t) => t.id === draggableId);
     if (!moved) return;
 
-    // permission: only owner or assignee, and not locked (unless owner)
-    const allowed = !moved.locked ? (isOwner || me?.uid === moved.assignee) : isOwner;
-    if (!allowed) return alert("You can't move this task.");
-
-    // build destination list preview (with moved task in it) to compute order
-    const lists = {
-      backlog: [...byStatus.backlog],
-      analyze: [...byStatus.analyze],
-      develop: [...byStatus.develop],
-      testing: [...byStatus.testing],
-      done:    [...byStatus.done],
-    };
-
-    // remove from source list
-    lists[from] = lists[from].filter(t => t.id !== draggableId);
-    // insert into destination (we don't know order yet)
-    lists[to].splice(destination.index, 0, moved);
-
-    const newOrder = calcNewOrder(lists[to], destination.index);
-    const payload = { order: newOrder };
-    if (from !== to) payload.status = to;
-
     try {
-      await update(projectId, draggableId, payload);
+      // Move across columns
+      if (srcCol !== dstCol) {
+        // quick move with new status + place at top by order timestamp
+        await update(projectId, moved.id, {
+          status: dstCol,
+          order: Date.now(),
+        });
+        return;
+      }
+
+      // Reorder within the same column: rebuild orders
+      const col = [...(byStatus[srcCol] || [])];
+      const [item] = col.splice(srcIdx, 1);
+      col.splice(dstIdx, 0, item);
+
+      // persist simple sequential order (1..n)
+      // (You can batch this in your store if you prefer)
+      await Promise.all(
+        col.map((t, i) =>
+          update(projectId, t.id, { order: i + 1 }).catch((e) => {
+            handleFirestoreError(e, "Couldn’t reorder tasks.");
+          })
+        )
+      );
     } catch (e) {
-      console.error("Drag update failed", e);
+      handleFirestoreError(e, "Drag operation failed.");
     }
-  };
+  }
 
   if (!me) return null;
 
@@ -196,18 +263,17 @@ export default function Board() {
             meUid={me?.uid}
             isOwner={isOwner}
             isMemberMe={isMemberMe}
-            canDragOrChangeStatus={canDragOrChangeStatus}
             onCreate={openCreate}
             onOpen={openDetail}
             onDelete={deleteTask}
-            onChangeState={(t, v)  =>
-              canChangeState(t)  ? changeState(v, t.id)       : alert("Only the owner can change state.")
+            onChangeState={(t, v) =>
+              canChangeState(t) ? changeState(v, t.id) : notify.error("Only the owner can change state.")
             }
             onChangeStatus={(t, v) =>
-              canChangeStatus(t) ? changeStatusQuick(v, t.id) : alert("Only the owner or assignee can change status.")
+              canChangeStatus(t) ? changeStatusQuick(v, t.id) : notify.error("Only the owner or assignee can change status.")
             }
             onChangePriority={(t, v) =>
-              (!t.locked && isOwner) ? changePriorityQuick(v, t.id) : alert("Only the owner can change priority.")
+              canChangePriority(t) ? changePriorityQuick(v, t.id) : notify.error("Only the owner can change priority.")
             }
           />
         ))}
