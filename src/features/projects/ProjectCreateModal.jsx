@@ -17,7 +17,9 @@ export default function ProjectCreateModal({ onCreate, onClose }) {
           <button
             onClick={() => name.trim() && onCreate(name.trim())}
             className="px-3 py-1 rounded bg-black text-white"
-          >Create</button>
+          >
+            Create
+          </button>
         </div>
       </div>
     </div>
