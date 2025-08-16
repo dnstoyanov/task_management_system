@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { DragDropContext } from "@hello-pangea/dnd";
 import { useTaskStore } from "../../stores/task.store";
 import { useAuthStore } from "../../stores/useAuthStore";
 import TaskDetailModal from "./TaskDetailModal";
@@ -25,16 +26,15 @@ export default function Board() {
   const [editModal, setEditModal] = useState(null);
   const [detailTask, setDetailTask] = useState(null);
 
-  // ✅ wait for auth before starting the tasks listener
+  // wait for auth before starting listeners
   useEffect(() => {
-    if (!me) return;                // <-- gate until signed-in user is known
+    if (!me) return;
     start(projectId);
     return () => stop();
   }, [projectId, me, start, stop]);
 
-  // ✅ and also gate the project/members listener
   useEffect(() => {
-    if (!me) return;                // <-- gate until signed-in user is known
+    if (!me) return;
     const unsub = ProjectService.watchOne(projectId, async (p) => {
       setProject(p);
       if (!p) { setMembers([]); setOwnerProfile(null); return; }
@@ -48,7 +48,7 @@ export default function Board() {
   const isOwner = !!(project && me && project.owner === me.uid);
   const isMemberMe = !!(project?.members || []).includes(me?.uid);
 
-  // deep-link (?t=id)
+  // deep-link (?t=taskId)
   useEffect(() => {
     const q = new URLSearchParams(location.search);
     const tid = q.get("t");
@@ -57,14 +57,15 @@ export default function Board() {
     if (t) setDetailTask(t);
   }, [location.search, tasks]);
 
+  // group tasks by normalized status
   const byStatus = useMemo(() => {
     const list = tasks.map((t) => ({ ...t, status: normalizeStatus(t.status) }));
     return {
-      backlog: list.filter((t) => t.status === "backlog"),
-      analyze: list.filter((t) => t.status === "analyze"),
-      develop: list.filter((t) => t.status === "develop"),
-      testing: list.filter((t) => t.status === "testing"),
-      done: list.filter((t) => t.status === "done"),
+      backlog: list.filter((t) => t.status === "backlog").sort((a,b)=>(a.order??0)-(b.order??0)),
+      analyze: list.filter((t) => t.status === "analyze").sort((a,b)=>(a.order??0)-(b.order??0)),
+      develop: list.filter((t) => t.status === "develop").sort((a,b)=>(a.order??0)-(b.order??0)),
+      testing: list.filter((t) => t.status === "testing").sort((a,b)=>(a.order??0)-(b.order??0)),
+      done:    list.filter((t) => t.status === "done").sort((a,b)=>(a.order??0)-(b.order??0)),
     };
   }, [tasks]);
 
@@ -84,13 +85,13 @@ export default function Board() {
 
   const cloneTask = async (t) => {
     const { id, createdAt, updatedAt, ...rest } = t;
-    await create(projectId, { ...rest, title: `${t.title} (copy)` });
+    await create(projectId, { ...rest, title: `${t.title} (copy)`, order: Date.now() });
   };
 
-  // CRUD updates
+  // CRUD helpers
   const saveForm = async (data) => {
     if (editModal?.id) await update(projectId, editModal.id, data);
-    else await create(projectId, { ...data, status: editModal.status || "backlog" });
+    else await create(projectId, { ...data, status: editModal.status || "backlog", order: Date.now() });
     setEditModal(null);
   };
   const deleteTask = async (task) => { await remove(projectId, task.id); if (detailTask?.id === task.id) closeDetail(); };
@@ -99,51 +100,18 @@ export default function Board() {
   const changeAssignee = async (assignee) => { if (!detailTask) return; await update(projectId, detailTask.id, { assignee: assignee || null }); };
   const changePriority = async (priority) => { if (!detailTask) return; await update(projectId, detailTask.id, { priority }); };
   const changeDescription = async (description) => { if (!detailTask) return; await update(projectId, detailTask.id, { description }); };
-  const canChangePriority = (t) => !t.locked && isOwner;
+
   const changePriorityQuick = async (priority, id) => { await update(projectId, id, { priority }); };
-  
-  // const changeState = async (state, id) => { await update(projectId, id, { state }); };
-  // const changeStatusQuick = async (status, id) => { await update(projectId, id, { status }); };
 
-  // Board.jsx
+  const changeStatusQuick = async (status, id) => {
+    try { await update(projectId, id, { status }); }
+    catch (e) { console.error("[status update failed]", e); }
+  };
 
-const changeStatusQuick = async (status, id) => {
-  const t = tasks.find(x => x.id === id);
-  console.log("[status change attempt]", {
-    me: me?.uid,
-    assignee: t?.assignee,
-    isOwner,
-    isMemberMe,
-    locked: t?.locked,
-    from: t?.status,
-    to: status,
-    members: project?.members,
-  });
-  try {
-    await update(projectId, id, { status });
-  } catch (e) {
-    console.error("[status update failed]", e);
-  }
-};
-
-const changeState = async (state, id) => {
-  const t = tasks.find(x => x.id === id);
-  console.log("[state change attempt]", {
-    me: me?.uid,
-    isOwner,
-    locked: t?.locked,
-    from: t?.state,
-    to: state,
-  });
-  try {
-    await update(projectId, id, { state });
-  } catch (e) {
-    console.error("[state update failed]", e);
-  }
-};
-
-
-
+  const changeState = async (state, id) => {
+    try { await update(projectId, id, { state }); }
+    catch (e) { console.error("[state update failed]", e); }
+  };
 
   const copyLink = async () => {
     if (!detailTask) return;
@@ -153,42 +121,97 @@ const changeState = async (state, id) => {
 
   const canChangeStatus = (t) => !t.locked && (isOwner || me?.uid === t.assignee);
   const canChangeState  = (t) => !t.locked && isOwner;
+  const canDragOrChangeStatus = (t) => canChangeStatus(t); // for Column/Draggable
 
-  // Optional: show nothing until auth ready (prevents render flashes)
+  // --- DND: compute a nice "order" number based on neighbors
+  function calcNewOrder(destList, insertIndex) {
+    const prev = destList[insertIndex - 1]?.order;
+    const next = destList[insertIndex]?.order;
+    const now = Date.now();
+    if (prev != null && next != null) return (prev + next) / 2;
+    if (prev != null) return prev + 1;
+    if (next != null) return next - 1;
+    return now; // empty list fallback
+  }
+
+  const onDragEnd = async (result) => {
+    const { destination, source, draggableId } = result;
+    if (!destination) return;
+
+    const from = source.droppableId;      // "backlog" | "analyze" | ...
+    const to   = destination.droppableId; // same
+    const samePlace = from === to && destination.index === source.index;
+    if (samePlace) return;
+
+    const moved = tasks.find(t => t.id === draggableId);
+    if (!moved) return;
+
+    // permission: only owner or assignee, and not locked (unless owner)
+    const allowed = !moved.locked ? (isOwner || me?.uid === moved.assignee) : isOwner;
+    if (!allowed) return alert("You can't move this task.");
+
+    // build destination list preview (with moved task in it) to compute order
+    const lists = {
+      backlog: [...byStatus.backlog],
+      analyze: [...byStatus.analyze],
+      develop: [...byStatus.develop],
+      testing: [...byStatus.testing],
+      done:    [...byStatus.done],
+    };
+
+    // remove from source list
+    lists[from] = lists[from].filter(t => t.id !== draggableId);
+    // insert into destination (we don't know order yet)
+    lists[to].splice(destination.index, 0, moved);
+
+    const newOrder = calcNewOrder(lists[to], destination.index);
+    const payload = { order: newOrder };
+    if (from !== to) payload.status = to;
+
+    try {
+      await update(projectId, draggableId, payload);
+    } catch (e) {
+      console.error("Drag update failed", e);
+    }
+  };
+
   if (!me) return null;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-      {[
-        ["Backlog",  "backlog",  byStatus.backlog],
-        ["Analyze",  "analyze",  byStatus.analyze],
-        ["Develop",  "develop",  byStatus.develop],
-        ["Testing",  "testing",  byStatus.testing],
-        ["Done",     "done",     byStatus.done],
-      ].map(([title, key, list]) => (
-        <Column
-          key={key}
-          title={title}
-          status={key}
-          tasks={list}
-          members={members}
-          meUid={me?.uid}
-          isOwner={isOwner}
-          isMemberMe={isMemberMe}
-          onCreate={openCreate}
-          onOpen={openDetail}
-          onDelete={deleteTask}
-          onChangeState={(t, v)  =>
-            canChangeState(t)  ? changeState(v, t.id)       : alert("Only the owner can change state.")
-          }
-          onChangeStatus={(t, v) =>
-            canChangeStatus(t) ? changeStatusQuick(v, t.id) : alert("Only the owner or assignee can change status.")
-          }
-          onChangePriority={(t, v) =>
-            canChangePriority(t) ? changePriorityQuick(v, t.id) : alert("Only the owner can change priority.")
-          }
-        />
-      ))}
+    <DragDropContext onDragEnd={onDragEnd}>
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        {[
+          ["Backlog",  "backlog",  byStatus.backlog],
+          ["Analyze",  "analyze",  byStatus.analyze],
+          ["Develop",  "develop",  byStatus.develop],
+          ["Testing",  "testing",  byStatus.testing],
+          ["Done",     "done",     byStatus.done],
+        ].map(([title, key, list]) => (
+          <Column
+            key={key}
+            title={title}
+            status={key}
+            tasks={list}
+            members={members}
+            meUid={me?.uid}
+            isOwner={isOwner}
+            isMemberMe={isMemberMe}
+            canDragOrChangeStatus={canDragOrChangeStatus}
+            onCreate={openCreate}
+            onOpen={openDetail}
+            onDelete={deleteTask}
+            onChangeState={(t, v)  =>
+              canChangeState(t)  ? changeState(v, t.id)       : alert("Only the owner can change state.")
+            }
+            onChangeStatus={(t, v) =>
+              canChangeStatus(t) ? changeStatusQuick(v, t.id) : alert("Only the owner or assignee can change status.")
+            }
+            onChangePriority={(t, v) =>
+              (!t.locked && isOwner) ? changePriorityQuick(v, t.id) : alert("Only the owner can change priority.")
+            }
+          />
+        ))}
+      </div>
 
       {editModal && (
         <TaskModal
@@ -217,6 +240,6 @@ const changeState = async (state, id) => {
           onChangeDescription={changeDescription}
         />
       )}
-    </div>
+    </DragDropContext>
   );
 }

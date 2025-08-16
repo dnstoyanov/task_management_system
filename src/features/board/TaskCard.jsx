@@ -31,34 +31,28 @@ const PRIORITY_STYLES = {
 };
 
 function normalizeString(val, allowed, fallback) {
-  // allow plain strings; if object like {value: "..."} grab .value; otherwise fallback
   let out = typeof val === "string" ? val : (val && val.value) || "";
   if (!allowed.includes(out)) out = fallback;
   return out;
 }
 
-// replace your AssigneeAvatar with this version
 function AssigneeAvatar({ user, size = "md" }) {
   const S = {
-    sm: { box: "w-5 h-5", txt: "text-[10px]" },  // 20px
-    md: { box: "w-7 h-7", txt: "text-[12px]" },  // 28px
-    lg: { box: "w-9 h-9", txt: "text-[14px]" },  // 36px
+    sm: { box: "w-5 h-5", txt: "text-[10px]" },
+    md: { box: "w-7 h-7", txt: "text-[12px]" },
+    lg: { box: "w-9 h-9", txt: "text-[14px]" },
   }[size];
 
   if (user?.photoURL) {
     return <img alt="" src={user.photoURL} className={`${S.box} rounded-full object-cover`} />;
   }
-
   const letter = (user?.displayName || user?.email || "?").toString().trim().charAt(0).toUpperCase();
   return (
-    <div
-      className={`${S.box} rounded-full bg-gray-200 flex items-center justify-center font-semibold ${S.txt}`}
-    >
+    <div className={`${S.box} rounded-full bg-gray-200 flex items-center justify-center font-semibold ${S.txt}`}>
       {letter}
     </div>
   );
 }
-
 
 export default function TaskCard({
   task,
@@ -72,72 +66,44 @@ export default function TaskCard({
   onChangeStatus,
   onChangePriority,
 }) {
-  // ---- Normalize values to strings (prevents React from seeing objects in JSX)
-  const statusValue  = normalizeString(task.status,  ["backlog","analyze","develop","testing","done"], "backlog");
-  const stateValue   = normalizeString(task.state,   ["new","active","review","blocked","closed"], "new");
-  const priorityValue= normalizeString(task.priority,["low","med","high"], "low");
+  const statusValue   = normalizeString(task.status,  ["backlog","analyze","develop","testing","done"], "backlog");
+  const stateValue    = normalizeString(task.state,   ["new","active","review","blocked","closed"], "new");
+  const priorityValue = normalizeString(task.priority,["low","med","high"], "low");
 
   const priorityClass = PRIORITY_STYLES[priorityValue] || PRIORITY_STYLES.med;
   const priorityText  = PRIORITY_LABEL[priorityValue];
 
-  // assignee lookup
   const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
   const assigneeUser = task.assignee ? memberMap[task.assignee] : null;
-  const assigneeText =
-    assigneeUser?.displayName || assigneeUser?.email || "Unassigned";
+  const assigneeText = assigneeUser?.displayName || assigneeUser?.email || "Unassigned";
 
-  // permissions
   const canChangeStatus   = !task.locked && (isOwner || (isMemberMe && meUid === task.assignee));
   const canChangeState    = !task.locked && isOwner;
   const canChangePriority = !task.locked && isOwner;
 
   const accent = STATUS_COLOR[statusValue] || "bg-gray-300";
 
-  const handleOpen = () => onOpen && onOpen(task);
-
-  const handleChangeState = (v) => {
-    // call both styles for compatibility
-    onChangeState && onChangeState(task, v);
-    onChangeState && onChangeState(v);
-  };
-  const handleChangeStatus = (v) => {
-    onChangeStatus && onChangeStatus(task, v);
-    onChangeStatus && onChangeStatus(v);
-  };
-  const handleChangePriority = (v) => {
-    onChangePriority && onChangePriority(task, v);
-    onChangePriority && onChangePriority(v);
-  };
-
   return (
-    <div
-      className="relative border rounded-lg bg-white shadow-sm p-3 cursor-pointer"
-      onClick={handleOpen}
-    >
-      {/* left color stripe */}
+    <div className="relative border rounded-lg bg-white shadow-sm p-3 cursor-pointer" onClick={() => onOpen?.(task)}>
+      {/* left accent */}
       <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${accent}`} />
 
       {/* title + priority pill */}
       <div className="flex justify-between items-start gap-3">
         <h4 className="font-medium break-words pr-2">{String(task.title || "")}</h4>
         <span
-          className={`text-[10px] px-2 py-0.5 rounded border ${priorityClass}`}
+          className={`text-[10px] px-2 py-0.5 text-sm rounded border ${priorityClass}`}
           onClick={(e) => e.stopPropagation()}
         >
           {priorityText}
         </span>
       </div>
 
-      {/* description preview */}
+      {/* description */}
       {task.description ? (
         <p
           className="text-[12px] text-gray-600 mt-3 break-words"
-          style={{
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
+          style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {String(task.description)}
         </p>
@@ -152,16 +118,12 @@ export default function TaskCard({
       </div>
 
       {/* footer controls */}
-      <div
-        className="mt-3 flex flex-wrap items-center gap-3"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* State */}
+      <div className="mt-3 flex flex-wrap items-center gap-3" onClick={(e) => e.stopPropagation()}>
         {canChangeState ? (
           <select
             className="text-xs border rounded px-2 py-1 bg-white"
             value={stateValue}
-            onChange={(e) => handleChangeState(e.target.value)}
+            onChange={(e) => onChangeState?.(e.target.value)}
           >
             <option value="new">New</option>
             <option value="active">Active</option>
@@ -170,17 +132,14 @@ export default function TaskCard({
             <option value="closed">Closed</option>
           </select>
         ) : (
-          <span className="text-xs text-gray-600">
-            State: {STATE_LABEL[stateValue]}
-          </span>
+          <span className="text-xs text-gray-600">State: {STATE_LABEL[stateValue]}</span>
         )}
 
-        {/* Status */}
         {canChangeStatus ? (
           <select
             className="text-xs border rounded px-2 py-1 bg-white"
             value={statusValue}
-            onChange={(e) => handleChangeStatus(e.target.value)}
+            onChange={(e) => onChangeStatus?.(e.target.value)}
           >
             <option value="backlog">Backlog</option>
             <option value="analyze">Analyze</option>
@@ -189,26 +148,21 @@ export default function TaskCard({
             <option value="done">Done</option>
           </select>
         ) : (
-          <span className="text-xs text-gray-600">
-            Status: {STATUS_LABEL[statusValue]}
-          </span>
+          <span className="text-xs text-gray-600">Status: {STATUS_LABEL[statusValue]}</span>
         )}
 
-        {/* Priority */}
         {canChangePriority ? (
           <select
             className="text-xs border rounded px-2 py-1 bg-white"
             value={priorityValue}
-            onChange={(e) => handleChangePriority(e.target.value)}
+            onChange={(e) => onChangePriority?.(e.target.value)}
           >
             <option value="low">Low</option>
             <option value="med">Medium</option>
             <option value="high">High</option>
           </select>
         ) : (
-          <span className="text-xs text-gray-600">
-            Priority: {PRIORITY_LABEL[priorityValue]}
-          </span>
+          <span className="text-xs text-gray-600">Priority: {PRIORITY_LABEL[priorityValue]}</span>
         )}
       </div>
     </div>

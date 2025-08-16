@@ -1,3 +1,4 @@
+// src/features/chat/TaskChat.jsx
 import { useEffect, useState } from "react";
 import {
   collection,
@@ -12,29 +13,13 @@ import {
 } from "firebase/firestore";
 import { db } from "../../core/firebase";
 import { useAuthStore } from "../../stores/useAuthStore";
-import { Pencil, Trash2 } from "lucide-react";
 
-/* Tiny icon button */
-function IconButton({ title, onClick, children }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className="inline-flex items-center justify-center h-7 w-7 border rounded hover:bg-gray-100"
-    >
-      {children}
-    </button>
-  );
-}
-
-export default function TaskChat({ pid, task, isOwner = false, disabled = false }) {
+export default function TaskChat({ pid, task, disabled = false, isOwner = false }) {
   const me = useAuthStore((s) => s.user);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
 
-  // edit state
+  // editing state
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState("");
 
@@ -96,15 +81,16 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
     }
   }
 
-  // Author OR project owner can edit/delete (and not when disabled)
-  const canEditOrDelete = (m) => (m.uid === me?.uid || isOwner) && !disabled;
+  // only the author OR the project owner can edit/delete
+  const canEditOrDelete = (m) => m.uid === me?.uid || isOwner;
 
   return (
     <div className="rounded border">
       <div className="max-h-64 overflow-y-auto p-3 space-y-3">
         {messages.map((m) => {
-          const ts =
-            m.createdAt?.toDate?.() ? m.createdAt.toDate().toLocaleString() : "";
+          const ts = m.createdAt?.toDate?.()
+            ? m.createdAt.toDate().toLocaleString()
+            : "";
           const edited = !!m.editedAt;
 
           return (
@@ -118,16 +104,22 @@ export default function TaskChat({ pid, task, isOwner = false, disabled = false 
                   )}
                 </div>
 
-                {canEditOrDelete(m) && (
+                {canEditOrDelete(m) && !disabled && (
                   <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
                     {editingId !== m.id && (
-                      <IconButton title="Edit message" onClick={() => beginEdit(m)}>
-                        <Pencil size={14} />
-                      </IconButton>
+                      <button
+                        className="text-xs px-2 py-0.5 border rounded"
+                        onClick={() => beginEdit(m)}
+                      >
+                        Edit
+                      </button>
                     )}
-                    <IconButton title="Delete message" onClick={() => remove(m.id)}>
-                      <Trash2 size={14} className="text-red-600" />
-                    </IconButton>
+                    <button
+                      className="text-xs px-2 py-0.5 border rounded text-red-600"
+                      onClick={() => remove(m.id)}
+                    >
+                      Delete
+                    </button>
                   </div>
                 )}
               </div>
