@@ -129,7 +129,7 @@ export default function TaskDetailModal({
 
             <div>
               <h3 className="font-semibold mb-2">Comments</h3>
-              <TaskChat pid={pid} task={task} disabled={lockedForMe} />
+              <TaskChat pid={pid} task={task} isOwner={isOwner} disabled={lockedForMe} />
             </div>
           </div>
 
