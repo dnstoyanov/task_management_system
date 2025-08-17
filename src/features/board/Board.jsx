@@ -34,17 +34,11 @@ export default function Board() {
   const [editModal, setEditModal] = useState(null);
   const [detailTask, setDetailTask] = useState(null);
 
-  // listeners
+  // -- Load project + member profiles
   useEffect(() => {
     if (!me || !projectId) return;
-    start(projectId);
-    return () => stop();
-  }, [projectId, me, start, stop]);
-
-  useEffect(() => {
-    if (!me) return;
     const unsub = ProjectService.watchOne(projectId, async (p) => {
-      setProject(p);
+      setProject(p || null);
       if (!p) {
         setMembers([]);
         setOwnerProfile(null);
@@ -59,17 +53,20 @@ export default function Board() {
 
   const isOwner = !!(project && me && project.owner === me.uid);
   const isMemberMe = !!(project?.members || []).includes(me?.uid);
+  const canSeeTasks = !!me && !!project && (isOwner || isMemberMe);
 
-  // recipients helper (owner + assignee, excluding actor)
-  const recipients = (assignee) => {
-    const s = new Set();
-    if (project?.owner) s.add(project.owner);
-    if (assignee) s.add(assignee);
-    if (me?.uid) s.delete(me.uid);
-    return [...s];
-  };
+  // watcher only after access is known
+  useEffect(() => {
+    if (!projectId || !me) return;
+    if (canSeeTasks) {
+      start(projectId);
+      return () => stop();
+    } else {
+      stop();
+    }
+  }, [projectId, me.uid, canSeeTasks, start, stop, me]);
 
-  // deep-link (?t=id)
+  // deep-link (?t=)
   useEffect(() => {
     const q = new URLSearchParams(location.search);
     const tid = q.get("t");
@@ -78,15 +75,26 @@ export default function Board() {
     if (t) setDetailTask(t);
   }, [location.search, tasks]);
 
+  // Ensures we always write UIDs
+  const toUid = (val) => {
+    if (!val) return null;
+    if (typeof val === "string" && val.includes("@")) {
+      const m = members.find((m) => (m.email || "").toLowerCase() === val.toLowerCase());
+      return m?.id || null;
+    }
+    return val; // assume UID
+  };
+
   // derived buckets
   const byStatus = useMemo(() => {
     const list = tasks.map((t) => ({ ...t, status: normalizeStatus(t.status) }));
+    const sortByOrder = (a, b) => (a.order || 0) - (b.order || 0);
     return {
-      backlog: list.filter((t) => t.status === "backlog").sort((a, b) => (a.order || 0) - (b.order || 0)),
-      analyze: list.filter((t) => t.status === "analyze").sort((a, b) => (a.order || 0) - (b.order || 0)),
-      develop: list.filter((t) => t.status === "develop").sort((a, b) => (a.order || 0) - (b.order || 0)),
-      testing: list.filter((t) => t.status === "testing").sort((a, b) => (a.order || 0) - (b.order || 0)),
-      done: list.filter((t) => t.status === "done").sort((a, b) => (a.order || 0) - (b.order || 0)),
+      backlog: list.filter((t) => t.status === "backlog").sort(sortByOrder),
+      analyze: list.filter((t) => t.status === "analyze").sort(sortByOrder),
+      develop: list.filter((t) => t.status === "develop").sort(sortByOrder),
+      testing: list.filter((t) => t.status === "testing").sort(sortByOrder),
+      done: list.filter((t) => t.status === "done").sort(sortByOrder),
     };
   }, [tasks]);
 
@@ -104,27 +112,36 @@ export default function Board() {
     setDetailTask(null);
   };
 
+  const recipients = (assignee) => {
+    const s = new Set();
+    if (project?.owner) s.add(project.owner);
+    const uid = toUid(assignee);
+    if (uid) s.add(uid);
+    if (me?.uid) s.delete(me.uid);
+    return [...s];
+  };
+
   const cloneTask = async (t) => {
     try {
       const { id, createdAt, updatedAt, ...rest } = t;
-      await create(projectId, { ...rest, title: `${t.title} (copy)` });
+      await create(projectId, { ...rest, title: `${t.title} (copy)`, assignee: toUid(rest.assignee) });
       notify.success("Task cloned.");
     } catch (e) {
       handleFirestoreError(e, "Couldn’t clone the task.");
     }
   };
 
-  // CRUD with toasts
+  // CRUD
   const saveForm = async (data) => {
     try {
+      const clean = { ...data, assignee: toUid(data.assignee) };
       if (editModal?.id) {
         const prev = tasks.find((t) => t.id === editModal.id);
-        await update(projectId, editModal.id, data);
+        await update(projectId, editModal.id, clean);
 
-        // notify on status / priority change when editing from modal
         if (prev) {
           const oldS = normalizeStatus(prev.status);
-          const newS = normalizeStatus(data.status ?? prev.status);
+          const newS = normalizeStatus(clean.status ?? prev.status);
           if (oldS !== newS) {
             await notifyStatusChange({
               pid: projectId,
@@ -136,7 +153,7 @@ export default function Board() {
             });
           }
           const oldP = prev.priority || "med";
-          const newP = data.priority ?? oldP;
+          const newP = clean.priority ?? oldP;
           if (oldP !== newP) {
             await notifyPriorityChange({
               pid: projectId,
@@ -151,7 +168,7 @@ export default function Board() {
         notify.success("Task updated.");
       } else {
         await create(projectId, {
-          ...data,
+          ...clean,
           status: editModal.status || "backlog",
           order: Date.now(),
         });
@@ -188,6 +205,17 @@ export default function Board() {
       if (!detailTask) return;
       const oldS = normalizeStatus(detailTask.status);
       const newS = normalizeStatus(status);
+
+      console.log("[ui.changeStatus]", {
+        actor: me?.uid,
+        taskId: detailTask.id,
+        currentAssignee: detailTask.assignee ?? null,
+        isOwner,
+        isMemberMe,
+        oldStatus: oldS,
+        requestedStatus: newS,
+      });
+
       await update(projectId, detailTask.id, { status });
       if (oldS !== newS) {
         await notifyStatusChange({
@@ -207,14 +235,24 @@ export default function Board() {
   const changeAssignee = async (assignee) => {
     try {
       if (!detailTask) return;
-      const prev = detailTask.assignee || null;
-      const next = assignee || null;
-      await update(projectId, detailTask.id, { assignee: next });
-      if (next && next !== prev && me?.uid) {
+      const prevUid = toUid(detailTask.assignee);
+      const nextUid = toUid(assignee);
+
+      console.log("[ui.changeAssignee]", {
+        actor: me?.uid,
+        taskId: detailTask.id,
+        prevAssignee: prevUid,
+        nextAssignee: nextUid,
+        isOwner,
+        isMemberMe,
+      });
+
+      await update(projectId, detailTask.id, { assignee: nextUid });
+      if (nextUid && nextUid !== prevUid) {
         await notifyAssignment({
           pid: projectId,
           taskId: detailTask.id,
-          toUid: next,
+          toUid: nextUid,
           byUid: me.uid,
         });
       }
@@ -228,6 +266,15 @@ export default function Board() {
       if (!detailTask) return;
       const oldP = detailTask.priority || "med";
       const newP = priority;
+
+      console.log("[ui.changePriority]", {
+        actor: me?.uid,
+        taskId: detailTask.id,
+        oldPriority: oldP,
+        requestedPriority: newP,
+        isOwner,
+      });
+
       await update(projectId, detailTask.id, { priority });
       if (oldP !== newP) {
         await notifyPriorityChange({
@@ -244,24 +291,17 @@ export default function Board() {
     }
   };
 
-  const changeDescription = async (description) => {
-    try {
-      if (!detailTask) return;
-      await update(projectId, detailTask.id, { description });
-      notify.success("Description updated.");
-    } catch (e) {
-      handleFirestoreError(e, "Couldn’t update the description.");
-    }
-  };
-
-  const canChangePriority = (t) => !t.locked && isOwner;
-  const canChangeStatus = (t) => !t.locked && (isOwner || me?.uid === t.assignee);
-  const canChangeState = (t) => !t.locked && isOwner;
-
   const changePriorityQuick = async (priority, id) => {
     try {
       const prev = tasks.find((t) => t.id === id);
       const oldP = prev?.priority || "med";
+      console.log("[ui.changePriority.quick]", {
+        actor: me?.uid,
+        taskId: id,
+        oldPriority: oldP,
+        requestedPriority: priority,
+        isOwner,
+      });
       await update(projectId, id, { priority });
       if (prev && oldP !== priority) {
         await notifyPriorityChange({
@@ -283,6 +323,17 @@ export default function Board() {
       const prev = tasks.find((t) => t.id === id);
       const oldS = normalizeStatus(prev?.status);
       const newS = normalizeStatus(status);
+
+      console.log("[ui.changeStatus.quick]", {
+        actor: me?.uid,
+        taskId: id,
+        isOwner,
+        isMemberMe,
+        prevAssignee: prev?.assignee ?? null,
+        oldStatus: oldS,
+        requestedStatus: newS,
+      });
+
       await update(projectId, id, { status });
       if (prev && oldS !== newS) {
         await notifyStatusChange({
@@ -318,7 +369,6 @@ export default function Board() {
     }
   };
 
-  // ---- DND ----
   async function onDragEnd(result) {
     const { destination, source, draggableId } = result;
     if (!destination) return;
@@ -337,10 +387,17 @@ export default function Board() {
 
     try {
       if (srcCol !== dstCol) {
-        await update(projectId, moved.id, {
-          status: dstCol,
-          order: Date.now(),
+        console.log("[ui.dnd.move]", {
+          actor: me?.uid,
+          taskId: moved.id,
+          from: srcCol,
+          to: dstCol,
+          isOwner,
+          isMemberMe,
+          assignee: moved.assignee ?? null,
         });
+
+        await update(projectId, moved.id, { status: dstCol, order: Date.now() });
         const oldS = normalizeStatus(moved.status);
         const newS = normalizeStatus(dstCol);
         if (oldS !== newS) {
@@ -362,9 +419,9 @@ export default function Board() {
 
       await Promise.all(
         col.map((t, i) =>
-          update(projectId, t.id, { order: i + 1 }).catch((e) => {
-            handleFirestoreError(e, "Couldn’t reorder tasks.");
-          })
+          update(projectId, t.id, { order: i + 1 }).catch((e) =>
+            handleFirestoreError(e, "Couldn’t reorder tasks.")
+          )
         )
       );
     } catch (e) {
@@ -373,6 +430,9 @@ export default function Board() {
   }
 
   if (!me) return null;
+  if (project && !canSeeTasks) {
+    return <div className="text-sm text-gray-600">You don’t have access to this project’s tasks.</div>;
+  }
 
   return (
     <DragDropContext onDragEnd={onDragEnd}>
@@ -397,17 +457,15 @@ export default function Board() {
             onOpen={openDetail}
             onDelete={deleteTask}
             onChangeState={(t, v) =>
-              canChangeState(t)
-                ? changeState(v, t.id)
-                : notify.error("Only the owner can change state.")
+              isOwner ? changeState(v, t.id) : notify.error("Only the owner can change state.")
             }
             onChangeStatus={(t, v) =>
-              canChangeStatus(t)
+              (!t.locked && (isOwner || me?.uid === toUid(t.assignee)))
                 ? changeStatusQuick(v, t.id)
                 : notify.error("Only the owner or assignee can change status.")
             }
             onChangePriority={(t, v) =>
-              canChangePriority(t)
+              (!t.locked && isOwner)
                 ? changePriorityQuick(v, t.id)
                 : notify.error("Only the owner can change priority.")
             }
@@ -443,7 +501,10 @@ export default function Board() {
           onChangeStatus={changeStatus}
           onChangeAssignee={changeAssignee}
           onChangePriority={changePriority}
-          onChangeDescription={changeDescription}
+          onChangeDescription={async (description) => {
+            try { await update(projectId, detailTask.id, { description }); notify.success("Description updated."); }
+            catch (e) { handleFirestoreError(e, "Couldn’t update the description."); }
+          }}
         />
       )}
     </DragDropContext>

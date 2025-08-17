@@ -64,7 +64,7 @@ export default function TaskCard({
   meUid,
   isOwner,
   isMemberMe,
-  canMove,                 // <-- from Column (optional)
+  canMove,
   onOpen,
   onDelete,
   onChangeState,
@@ -82,23 +82,27 @@ export default function TaskCard({
     task.priority, ["low", "med", "high"], "low"
   );
 
-  const priorityClass = PRIORITY_STYLES[priorityValue] || PRIORITY_STYLES.med;
-  const priorityText = PRIORITY_LABEL[priorityValue];
-
   const memberMap = Object.fromEntries(members.map((m) => [m.id, m]));
   const assigneeUser = task.assignee ? memberMap[task.assignee] : null;
+
+  // 🔐 Normalize: treat task.assignee as UID; if it's an email, try to resolve to UID
+  let assigneeUid = task.assignee || null;
+  if (assigneeUid && typeof assigneeUid === "string" && assigneeUid.includes("@")) {
+    const m = members.find((m) => (m.email || "").toLowerCase() === assigneeUid.toLowerCase());
+    assigneeUid = m?.id || null;
+  }
+
   const assigneeText = assigneeUser?.displayName || assigneeUser?.email || "Unassigned";
 
-  // Compute default move permission if prop not provided
   const canMoveComputed =
-    canMove ??
-    (!task.locked && (isOwner || (isMemberMe && meUid === task.assignee)));
+    canMove ?? (!task.locked && (isOwner || (isMemberMe && meUid && assigneeUid && meUid === assigneeUid)));
 
   const canChangeStatus =
-    !task.locked && (isOwner || (isMemberMe && meUid === task.assignee));
+    !task.locked && (isOwner || (isMemberMe && meUid && assigneeUid && meUid === assigneeUid));
   const canChangeState = !task.locked && isOwner;
   const canChangePriority = !task.locked && isOwner;
 
+  const priorityClass = PRIORITY_STYLES[priorityValue] || PRIORITY_STYLES.med;
   const accent = STATUS_COLOR[statusValue] || "bg-gray-300";
 
   return (
@@ -108,7 +112,6 @@ export default function TaskCard({
     >
       <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${accent}`} />
 
-      {/* Header with conditional dots */}
       {variant === "board" ? (
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0 pr-2">
@@ -117,11 +120,10 @@ export default function TaskCard({
               className={`shrink-0 text-[11px] px-2 py-0.5 rounded border ${priorityClass}`}
               onClick={(e) => e.stopPropagation()}
             >
-              {priorityText}
+              {PRIORITY_LABEL[priorityValue]}
             </span>
           </div>
 
-          {/* Show dots ONLY if user can move the card */}
           {canMoveComputed && (
             <span
               className="shrink-0 p-1 rounded text-gray-500 cursor-grab select-none"
@@ -140,7 +142,7 @@ export default function TaskCard({
             className={`text-[11px] px-2 py-0.5 rounded border ${priorityClass}`}
             onClick={(e) => e.stopPropagation()}
           >
-            {priorityText}
+            {PRIORITY_LABEL[priorityValue]}
           </span>
         </div>
       )}
@@ -148,12 +150,7 @@ export default function TaskCard({
       {task.description ? (
         <p
           className="text-[12px] text-gray-600 mt-3 break-words"
-          style={{
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
+          style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}
         >
           {String(task.description)}
         </p>
