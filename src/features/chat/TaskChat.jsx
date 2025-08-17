@@ -20,14 +20,20 @@ import { CornerDownRight, Pencil, Trash2, CheckCircle2 } from "lucide-react";
 
 /* small helpers */
 const fmt = (ts) => (ts?.toDate?.() ? ts.toDate().toLocaleString() : "");
-function Avatar({ nameOrEmail = "?" }) {
+
+function Avatar({ nameOrEmail = "?", photoURL, size = 8 }) {
   const letter = (nameOrEmail || "?").trim().charAt(0).toUpperCase();
+  const box = `w-${size} h-${size}`;
+  if (photoURL) {
+    return <img src={photoURL} alt="" className={`${box} rounded-full object-cover`} />;
+  }
   return (
-    <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-semibold">
+    <div className={`${box} rounded-full bg-gray-200 flex items-center justify-center text-xs font-semibold`}>
       {letter || "?"}
     </div>
   );
 }
+
 function renderWithMentions(text) {
   const parts = text.split(/(@[^\s]+)/g);
   return parts.map((p, i) =>
@@ -44,7 +50,7 @@ function renderWithMentions(text) {
 export default function TaskChat({
   pid,
   task,
-  members = [], // [{id, displayName, email}]
+  members = [], // [{id, displayName, email, photoURL}]
   disabled = false,
   isOwner = false,
 }) {
@@ -59,6 +65,7 @@ export default function TaskChat({
 
   /* mentions state */
   const [mention, setMention] = useState({ key: null, query: "" });
+  const [mentionIndex, setMentionIndex] = useState(-1); // highlighted row in dropdown
   const mentionBoxRef = useRef(null);
 
   const colMessages = useMemo(
@@ -114,7 +121,7 @@ export default function TaskChat({
       const key = m[1].toLowerCase();
       if (memberLookup.has(key)) ids.add(memberLookup.get(key));
     }
-    // @handle
+    // @handle/name
     for (const m of text.matchAll(/@([A-Za-z0-9._-]+)/g)) {
       const key = m[1].toLowerCase();
       if (memberLookup.has(key)) ids.add(memberLookup.get(key));
@@ -133,8 +140,24 @@ export default function TaskChat({
           (m.email || "").toLowerCase().includes(q) ||
           (m.displayName || "").toLowerCase().replace(/\s+/g, "").includes(q)
       )
-      .slice(0, 6);
+      .slice(0, 8);
   }, [mention, members]);
+
+  // keep highlighted row valid when the list changes
+  useEffect(() => {
+    if (!mention.key || mentionCandidates.length === 0) {
+      setMentionIndex(-1);
+    } else {
+      setMentionIndex((i) => (i < 0 ? 0 : Math.min(i, mentionCandidates.length - 1)));
+    }
+  }, [mention.key, mentionCandidates.length]);
+
+  // scroll highlighted row into view
+  useEffect(() => {
+    if (!mentionBoxRef.current) return;
+    const el = mentionBoxRef.current.querySelector('[data-active="true"]');
+    if (el) el.scrollIntoView({ block: "nearest" });
+  }, [mentionIndex]);
 
   function handleDraftChange(key, value) {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -150,6 +173,35 @@ export default function TaskChat({
       return { ...d, [key]: newV };
     });
     setMention({ key: null, query: "" });
+    setMentionIndex(-1);
+  }
+
+  // keyboard handling for mention dropdown
+  function maybeHandleMentionKeys(key, e) {
+    if (mention.key !== key || mentionCandidates.length === 0) return false;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setMentionIndex((i) => Math.min((i < 0 ? 0 : i) + 1, mentionCandidates.length - 1));
+      return true;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setMentionIndex((i) => Math.max((i < 0 ? 0 : i) - 1, 0));
+      return true;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const sel = mentionCandidates[Math.max(0, mentionIndex)];
+      if (sel) insertMention(key, sel.email);
+      return true;
+    }
+    if (e.key === "Escape") {
+      setMention({ key: null, query: "" });
+      setMentionIndex(-1);
+      return true;
+    }
+    return false;
   }
 
   /* ---------- CRUD ---------- */
@@ -167,7 +219,6 @@ export default function TaskChat({
         resolved: false,
       });
 
-      // notifications for mentions
       const toUids = mentionedUidsFrom(t);
       if (toUids.length) {
         await notifyMentions({ pid, taskId: task.id, toUids, byUid: me.uid, messageId: ref.id });
@@ -267,17 +318,56 @@ export default function TaskChat({
     }
   }
 
+  /* ---------- UI ---------- */
+
+  const MentionDropdown = ({ list, onPick }) => {
+    if (!list.length) return null;
+    return (
+      <div
+        ref={mentionBoxRef}
+        className="absolute left-0 top-full mt-1 w-72 rounded-md border bg-white shadow z-10 max-h-56 overflow-auto"
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        {list.map((u, i) => {
+          const active = i === mentionIndex;
+          return (
+            <button
+              key={u.id}
+              type="button"
+              data-active={active ? "true" : "false"}
+              className={`w-full text-left px-2 py-2 text-sm flex items-center gap-2 hover:bg-gray-50 ${
+                active ? "bg-gray-100" : ""
+              }`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onPick(u.email);
+              }}
+            >
+              <Avatar nameOrEmail={u.displayName || u.email} photoURL={u.photoURL} size={6} />
+              <div className="min-w-0">
+                <div className="font-medium truncate">{u.displayName || u.email}</div>
+                {u.displayName && (
+                  <div className="text-xs text-gray-500 truncate">@{u.email}</div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="p-2 rounded border overflow-hidden bg-white">
       {/* THREAD */}
-      <div className="flex flex-col gap-3">
+      <div className="divide-y">
         {messages.map((m) => {
           const editable = canEditOrDelete(m.uid) && !disabled;
           const mEditing = editing?.type === "message" && editing.mid === m.id;
           const threadReplies = replies[m.id] || [];
 
           return (
-            <div key={m.id} className="rounded-lg bg-gray-100">
+            <div key={m.id} className="rounded-lg bg-gray-100 mb-2">
               <div className="flex items-start gap-3 p-3">
                 <Avatar nameOrEmail={m.author || m.uid} />
                 <div className="flex-1 min-w-0">
@@ -346,9 +436,7 @@ export default function TaskChat({
                       </button>
                     </div>
                   ) : (
-                    <p className="mt-2 text-sm whitespace-pre-wrap">
-                      {renderWithMentions(m.text)}
-                    </p>
+                    <p className="mt-2 text-sm whitespace-pre-wrap">{renderWithMentions(m.text)}</p>
                   )}
                 </div>
               </div>
@@ -411,9 +499,7 @@ export default function TaskChat({
                               </button>
                             </div>
                           ) : (
-                            <p className="mt-2 text-sm whitespace-pre-wrap">
-                              {renderWithMentions(r.text)}
-                            </p>
+                            <p className="mt-2 text-sm whitespace-pre-wrap">{renderWithMentions(r.text)}</p>
                           )}
                         </div>
                       </div>
@@ -429,28 +515,20 @@ export default function TaskChat({
                       placeholder="Write a reply… (@email or @handle)"
                       value={draft[m.id] || ""}
                       onChange={(e) => handleDraftChange(m.id, e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && sendReply(m.id)}
+                      onKeyDown={(e) => {
+                        if (maybeHandleMentionKeys(m.id, e)) return;
+                        if (e.key === "Enter" && !e.shiftKey && mention.key !== m.id) {
+                          e.preventDefault();
+                          sendReply(m.id);
+                        }
+                      }}
                     />
 
                     {mention.key === m.id && (mention.query || "").length > 0 && (
-                      <div
-                        ref={mentionBoxRef}
-                        className="absolute left-0 top-full mt-1 w-56 rounded border bg-white shadow z-10"
-                        onMouseDown={(e) => e.preventDefault()}
-                      >
-                        {mentionCandidates.map((u) => (
-                          <button
-                            key={u.id}
-                            className="w-full text-left px-2 py-1 text-sm hover:bg-gray-50"
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              insertMention(m.id, u.email);
-                            }}
-                          >
-                            @{u.email}
-                          </button>
-                        ))}
-                      </div>
+                      <MentionDropdown
+                        list={mentionCandidates}
+                        onPick={(email) => insertMention(m.id, email)}
+                      />
                     )}
                   </div>
                 )}
@@ -469,7 +547,13 @@ export default function TaskChat({
             placeholder="Write a comment… (@email or @handle)"
             value={draft.new || ""}
             onChange={(e) => handleDraftChange("new", e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !disabled && send()}
+            onKeyDown={(e) => {
+              if (maybeHandleMentionKeys("new", e)) return;
+              if (e.key === "Enter" && !e.shiftKey && mention.key !== "new") {
+                e.preventDefault();
+                !disabled && send();
+              }
+            }}
           />
 
           <button
@@ -481,24 +565,10 @@ export default function TaskChat({
           </button>
 
           {mention.key === "new" && mentionCandidates.length > 0 && (
-            <div
-              ref={mentionBoxRef}
-              className="absolute left-0 top-full mt-1 w-56 rounded border bg-white shadow z-10"
-              onMouseDown={(e) => e.preventDefault()}
-            >
-              {mentionCandidates.map((u) => (
-                <button
-                  key={u.id}
-                  className="w-full text-left px-2 py-1 text-sm hover:bg-gray-50"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    insertMention("new", u.email);
-                  }}
-                >
-                  @{u.email}
-                </button>
-              ))}
-            </div>
+            <MentionDropdown
+              list={mentionCandidates}
+              onPick={(email) => insertMention("new", email)}
+            />
           )}
         </div>
       </div>
