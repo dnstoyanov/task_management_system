@@ -11,6 +11,7 @@ import Column from "./Column";
 import { ProjectService } from "../../core/services/project.service";
 import { UserService } from "../../core/services/user.service";
 import { handleFirestoreError, notify } from "../../components/toast";
+import { notifyAssignment } from "../../services/notification.service";
 
 const normalizeStatus = (s) =>
   s === "todo" ? "backlog" : s === "in_progress" ? "develop" : s;
@@ -31,7 +32,7 @@ export default function Board() {
 
   // listeners
   useEffect(() => {
-    if (!me) return;
+    if (!me || !projectId) return;
     start(projectId);
     return () => stop();
   }, [projectId, me, start, stop]);
@@ -144,7 +145,17 @@ export default function Board() {
   const changeAssignee = async (assignee) => {
     try {
       if (!detailTask) return;
-      await update(projectId, detailTask.id, { assignee: assignee || null });
+      const prev = detailTask.assignee || null;
+      const next = assignee || null;
+      await update(projectId, detailTask.id, { assignee: next });
+      // fire assignment notification when changed and not self
+      if (next && next !== prev && me?.uid) {
+        try {
+          await notifyAssignment({ pid: projectId, taskId: detailTask.id, toUid: next, byUid: me.uid });
+        } catch (err) {
+          console.warn("[notifyAssignment] failed:", err?.code || err?.message || err);
+        }
+      }
     } catch (e) {
       handleFirestoreError(e, "You can’t change the assignee.");
     }
@@ -229,7 +240,6 @@ export default function Board() {
       col.splice(dstIdx, 0, item);
 
       // persist simple sequential order (1..n)
-      // (You can batch this in your store if you prefer)
       await Promise.all(
         col.map((t, i) =>
           update(projectId, t.id, { order: i + 1 }).catch((e) => {

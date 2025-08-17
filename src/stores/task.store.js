@@ -1,18 +1,26 @@
 import { create } from "zustand";
-import { TaskService } from "../core/services/task.service";
+import { watchTasks, createTask, updateTask, removeTask } from "../core/services/task.service";
 
-export const useTaskStore = create((set, get) => ({
-  tasks: [],
-  unsub: null,
+export const useTaskStore = create((set, get) => {
+  let unsub = null;
 
-  start(pid) {
-    get().stop();
-    const unsub = TaskService.watch(pid, (items) => set({ tasks: items }));
-    set({ unsub });
-  },
-  stop() { const u = get().unsub; if (u) { u(); set({ unsub: null }); } },
+  return {
+    tasks: [],
 
-  create: (pid, task) => TaskService.create(pid, task),
-  update: (pid, tid, patch) => TaskService.update(pid, tid, patch),
-  remove: (pid, tid) => TaskService.remove(pid, tid),
-}));
+    start: (pid) => {
+      if (!pid) { console.warn("[task.store] no pid"); return; }
+      get().stop();
+      unsub = watchTasks(pid, (list) => set({ tasks: list }));
+    },
+
+    stop: () => {
+      if (unsub) { try { unsub(); } catch {} finally { unsub = null; } }
+      set({ tasks: [] });
+    },
+
+    // expose CRUD for Board.jsx
+    create: (pid, data) => createTask(pid, data),
+    update: (pid, id, patch) => updateTask(pid, id, patch),
+    remove: (pid, id) => removeTask(pid, id),
+  };
+});

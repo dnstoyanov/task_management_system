@@ -1,9 +1,9 @@
-// src/app/providers.jsx
 import { useEffect } from "react";
 import { useAuthStore } from "../stores/useAuthStore";
 import { useProjectStore } from "../stores/project.store";
-import { ToastContainer } from "react-toastify";
-import "react-toastify/dist/ReactToastify.css";
+import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { db } from "../core/firebase";
+import { toast } from "react-toastify";
 
 export function Providers({ children }) {
   const init = useAuthStore((s) => s.init);
@@ -17,11 +17,24 @@ export function Providers({ children }) {
     else stop();
   }, [user, startPublic, stop]);
 
-  return (
-    <>
-      {children}
-      {/* Global toast viewport */}
-      <ToastContainer />
-    </>
-  );
+  // in-app notifications (mentions)
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, "users", user.uid, "notifications"),
+      where("read", "==", false),
+      orderBy("createdAt", "desc")
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      snap.docChanges().forEach((ch) => {
+        if (ch.type === "added") {
+          const n = ch.doc.data();
+          toast.info(n.toastText || "🔔 You were mentioned");
+        }
+      });
+    });
+    return () => unsub();
+  }, [user]);
+
+  return children;
 }

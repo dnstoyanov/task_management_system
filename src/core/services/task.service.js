@@ -1,42 +1,39 @@
-import { db } from "../firebase";
+// minimal watcher with error callback + guard
 import {
-  collection, addDoc, doc, updateDoc, deleteDoc,
-  onSnapshot, serverTimestamp, orderBy, query
+  collection, onSnapshot, orderBy, query,
+  addDoc, doc, updateDoc, deleteDoc, serverTimestamp
 } from "firebase/firestore";
+import { db } from "../firebase";
+import { toast } from "react-toastify";
 
-export const TaskService = {
-  watch(pid, cb) {
-    const col = collection(db, "projects", pid, "tasks");
-    const q = query(col, orderBy("createdAt", "asc"));
-    return onSnapshot(
-      q,
-      (snap) => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
-      (err) => console.error("[tasks listener error]", err)
-    );
+export function watchTasks(projectId, onChange) {
+  if (!projectId) { console.warn("[tasks] start skipped: missing projectId"); return () => {}; }
+  const col = collection(db, "projects", projectId, "tasks");
+  const q = query(col, orderBy("order", "desc"));
+  const unsub = onSnapshot(
+    q,
+    (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (err) => {
+      console.warn("[tasks watch error]", { projectId, code: err.code, msg: err.message });
+      if (err.code === "permission-denied") toast.error("You don’t have permission to view tasks for this project.");
+      else toast.error(`Tasks error: ${err.message}`);
+    }
+  );
+  return unsub;
+}
 
-  },
-  create(pid, task) {
-    const col = collection(db, "projects", pid, "tasks");
-    const now = serverTimestamp();
-    return addDoc(col, {
-      title: task.title,
-      description: task.description || "",
-      status: task.status || "backlog",
-      state:  task.state  || "new", 
-      priority: task.priority || "med",
-      assignee: task.assignee || null,
-      locked: false,
-      createdAt: now,
-      updatedAt: now,
-    });
-  },
-  update(pid, tid, patch) {
-    return updateDoc(doc(db, "projects", pid, "tasks", tid), {
-      ...patch,
-      updatedAt: serverTimestamp(),
-    });
-  },
-  remove(pid, tid) {
-    return deleteDoc(doc(db, "projects", pid, "tasks", tid));
-  },
-};
+// ---- CRUD used by the store/Board ----
+export async function createTask(projectId, data) {
+  const col = collection(db, "projects", projectId, "tasks");
+  await addDoc(col, { ...data, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+}
+
+export async function updateTask(projectId, id, patch) {
+  const ref = doc(db, "projects", projectId, "tasks", id);
+  await updateDoc(ref, { ...patch, updatedAt: serverTimestamp() });
+}
+
+export async function removeTask(projectId, id) {
+  const ref = doc(db, "projects", projectId, "tasks", id);
+  await deleteDoc(ref);
+}

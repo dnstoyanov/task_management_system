@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import TaskChat from "../chat/TaskChat";
 import { useAuthStore } from "../../stores/useAuthStore";
-import { Link as LinkIcon, Copy, Trash2, X, Lock, Unlock, Pencil } from "lucide-react";
+import { Link as LinkIcon, Copy, Trash2, X, Lock, Unlock, Pencil, Bell } from "lucide-react";
+import { notifyAssignment } from "../../services/notification.service";
 
-/* Status map + normalizer (matches your columns) */
+/* Status map + normalizer */
 const STATUS_LABELS = {
   backlog: "Backlog",
   analyze: "Analyze",
@@ -13,7 +14,7 @@ const STATUS_LABELS = {
 };
 const normalizeStatus = (s) => (s === "todo" ? "backlog" : s === "in_progress" ? "develop" : s);
 
-/* Priority chips — same styles as board */
+/* Priority chips */
 const PRIORITY_LABELS = { low: "Low", med: "Medium", high: "High" };
 const PRIORITY_STYLES = {
   low: "bg-green-100 text-green-700 border-green-200",
@@ -22,7 +23,6 @@ const PRIORITY_STYLES = {
 };
 const priorityClass = (p) => PRIORITY_STYLES[p] || PRIORITY_STYLES.med;
 
-/* Reusable tiny icon button */
 function IconButton({ title, onClick, children, className = "" }) {
   return (
     <button
@@ -51,7 +51,7 @@ export default function TaskDetailModal({
   onChangeAssignee,
   onChangePriority,
   onChangeDescription,
-  onClone, // optional
+  onClone,
 }) {
   const myUid = useAuthStore((s) => s.user?.uid);
 
@@ -61,8 +61,8 @@ export default function TaskDetailModal({
     uid;
 
   const isAssignee = !!myUid && task.assignee === myUid;
-  const lockedForMe = task.locked && !isOwner; // only owner can edit while locked
-  const canEditAssigneePriority = isOwner && !lockedForMe; // owner only
+  const lockedForMe = task.locked && !isOwner;
+  const canEditAssigneePriority = isOwner && !lockedForMe;
   const canChangeStatus = (isOwner || isAssignee) && (!task.locked || isOwner);
 
   // description editor
@@ -72,12 +72,6 @@ export default function TaskDetailModal({
     setEditingDesc(false);
     setDescDraft(task.description || "");
   }, [task.id, task.description]);
-
-  // chat message count -> compact layout
-  const [msgCount, setMsgCount] = useState(0);
-  const descShort = !(task.description && task.description.trim().length > 140);
-  const compact = msgCount === 0 && descShort; // shrink when empty-ish
-  const containerMaxH = compact ? "65vh" : "85vh"; // modal height cap
 
   const saveDesc = async () => {
     if (!isOwner || lockedForMe) return;
@@ -93,44 +87,39 @@ export default function TaskDetailModal({
 
   const statusValue = normalizeStatus(task.status);
 
+  // notify on assignee change
+  async function handleAssigneeChange(val) {
+    const prev = task.assignee || null;
+    await onChangeAssignee?.(val || null);
+    if (val && val !== prev) {
+      await notifyAssignment({ pid, taskId: task.id, toUid: val, byUid: myUid });
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-      {/* NOTE: flex column + inline maxHeight for dynamic shrink */}
-      <div
-        className="bg-white rounded-xl w-full max-w-4xl overflow-hidden shadow flex flex-col"
-        style={{ maxHeight: containerMaxH }}
-      >
-        {/* Header with icons */}
+      {/* Shrink if few comments; otherwise grow up to 85vh */}
+      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[85vh] overflow-hidden shadow">
+        {/* Header */}
         <div className="p-3 border-b flex items-center gap-2 justify-end">
-          <IconButton title="Copy link" onClick={onCopyLink}>
-            <LinkIcon size={18} />
-          </IconButton>
-
-          <IconButton title="Clone task" onClick={() => onClone?.()}>
-            <Copy size={18} />
-          </IconButton>
-
+          <IconButton title="Copy link" onClick={onCopyLink}><LinkIcon size={18} /></IconButton>
+          <IconButton title="Clone task" onClick={() => onClone?.()}><Copy size={18} /></IconButton>
           {isOwner && (
             <>
               <IconButton title={task.locked ? "Unlock" : "Lock"} onClick={onToggleLock}>
                 {task.locked ? <Unlock size={18} /> : <Lock size={18} />}
               </IconButton>
-
               <IconButton title="Delete task" onClick={onDelete} className="border-red-200">
                 <Trash2 size={18} className="text-red-600" />
               </IconButton>
             </>
           )}
-
-          <IconButton title="Close" onClick={onClose}>
-            <X size={18} />
-          </IconButton>
+          <IconButton title="Close" onClick={onClose}><X size={18} /></IconButton>
         </div>
 
-        {/* Body: grid; when not compact it expands to fill (flex-1 min-h-0) */}
-        <div className={`grid grid-cols-1 md:grid-cols-3 gap-0 ${compact ? "" : "flex-1 min-h-0"}`}>
-          {/* LEFT: title, description, divider, chat */}
-          <div className={`md:col-span-2 p-5 ${compact ? "" : "h-full"} flex flex-col overflow-hidden`}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 h-[calc(85vh-56px)]">
+          {/* LEFT: title, description, comments */}
+          <div className="md:col-span-2 p-5 space-y-4 overflow-hidden flex flex-col">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-semibold">{task.title}</h2>
               {task.locked && (
@@ -138,8 +127,8 @@ export default function TaskDetailModal({
               )}
             </div>
 
-            {/* Description block */}
-            <div className="mt-4">
+            {/* Description */}
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold">Description</h3>
                 {isOwner && !lockedForMe && !editingDesc && (
@@ -155,50 +144,40 @@ export default function TaskDetailModal({
               {editingDesc ? (
                 <>
                   <textarea
-                    className="mt-2 w-full border rounded px-3 py-2 min-h-[120px]"
+                    className="w-full border rounded px-3 py-2 min-h-[120px]"
                     value={descDraft}
                     onChange={(e) => setDescDraft(e.target.value)}
                     placeholder="Write a detailed description..."
                   />
-                  <div className="mt-2 flex gap-2">
-                    <button onClick={saveDesc} className="px-3 py-1 rounded bg-black text-white">
-                      Save
-                    </button>
+                  <div className="flex gap-2">
+                    <button onClick={saveDesc} className="px-3 py-1 rounded bg-black text-white">Save</button>
                     <button
-                      onClick={() => {
-                        setEditingDesc(false);
-                        setDescDraft(task.description || "");
-                      }}
+                      onClick={() => { setEditingDesc(false); setDescDraft(task.description || ""); }}
                       className="px-3 py-1 border rounded"
                     >
                       Cancel
                     </button>
                     {task.description && (
-                      <button onClick={clearDesc} className="px-3 py-1 border rounded text-red-600">
-                        Clear
-                      </button>
+                      <button onClick={clearDesc} className="px-3 py-1 border rounded text-red-600">Clear</button>
                     )}
                   </div>
                 </>
               ) : task.description ? (
-                <p className="mt-2 whitespace-pre-wrap text-gray-700">{task.description}</p>
+                <p className="whitespace-pre-wrap text-gray-700">{task.description}</p>
               ) : (
-                <p className="mt-2 text-sm text-gray-400 italic">No description</p>
+                <p className="text-sm text-gray-400 italic">No description</p>
               )}
             </div>
 
-            {/* 1px divider */}
-            <div className="h-px bg-gray-200 my-4" />
-
-            {/* Chat – when not compact, it fills; when compact, it just sizes to content */}
-            <div className={compact ? "" : "flex-1 min-h-0"}>
+            {/* Chat fills remaining height */}
+            <div className="flex-1 min-h-0">
+              <h3 className="font-semibold mb-2">Comments</h3>
               <TaskChat
                 pid={pid}
                 task={task}
+                members={members}
                 isOwner={isOwner}
                 disabled={lockedForMe}
-                className={compact ? "" : "h-full"}
-                onMessageCountChange={(n) => setMsgCount(n)}
               />
             </div>
           </div>
@@ -208,7 +187,6 @@ export default function TaskDetailModal({
             {/* Status */}
             <div>
               <h4 className="font-semibold mb-2">Status</h4>
-
               {canChangeStatus ? (
                 <select
                   className="text-sm px-2 py-1 rounded border bg-white w-[12rem] block"
@@ -216,9 +194,7 @@ export default function TaskDetailModal({
                   onChange={(e) => onChangeStatus && onChangeStatus(e.target.value)}
                 >
                   {Object.entries(STATUS_LABELS).map(([val, label]) => (
-                    <option key={val} value={val}>
-                      {label}
-                    </option>
+                    <option key={val} value={val}>{label}</option>
                   ))}
                 </select>
               ) : (
@@ -226,18 +202,14 @@ export default function TaskDetailModal({
                   {STATUS_LABELS[statusValue]}
                 </div>
               )}
-
               {!canChangeStatus && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Only the owner or assignee can change status.
-                </p>
+                <p className="text-xs text-gray-500 mt-1">Only the owner or assignee can change status.</p>
               )}
             </div>
 
             <div>
               <h4 className="font-semibold mb-2">Details</h4>
               <dl className="text-sm space-y-3">
-                {/* Owner */}
                 <div className="flex items-center justify-between">
                   <dt className="text-gray-500">Owner</dt>
                   <dd className="min-w-[12rem] font-semibold text-right">
@@ -245,7 +217,6 @@ export default function TaskDetailModal({
                   </dd>
                 </div>
 
-                {/* Assignee */}
                 <div className="flex items-center justify-between gap-2">
                   <dt className="text-gray-500">Assignee</dt>
                   <dd className="min-w-[12rem]">
@@ -253,15 +224,11 @@ export default function TaskDetailModal({
                       <select
                         className="w-[12rem] ml-auto block border rounded px-2 py-1 bg-white"
                         value={task.assignee || ""}
-                        onChange={(e) =>
-                          onChangeAssignee && onChangeAssignee(e.target.value || null)
-                        }
+                        onChange={(e) => handleAssigneeChange(e.target.value || null)}
                       >
                         <option value="">Unassigned</option>
                         {members.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.displayName || m.email}
-                          </option>
+                          <option key={m.id} value={m.id}>{m.displayName || m.email}</option>
                         ))}
                       </select>
                     ) : (
@@ -272,7 +239,6 @@ export default function TaskDetailModal({
                   </dd>
                 </div>
 
-                {/* Priority — colored pill */}
                 <div className="flex items-center justify-between gap-2">
                   <dt className="text-gray-500">Priority</dt>
                   <dd className="min-w-[12rem]">
@@ -287,27 +253,18 @@ export default function TaskDetailModal({
                           <option value="med">Medium</option>
                           <option value="high">High</option>
                         </select>
-                        <span
-                          className={`inline-flex items-center justify-center text-[11px] px-2 py-0.5 rounded border ${priorityClass(
-                            task.priority
-                          )}`}
-                        >
+                        <span className={`inline-flex items-center justify-center text-[11px] px-2 py-0.5 rounded border ${priorityClass(task.priority)}`}>
                           {PRIORITY_LABELS[task.priority] ?? task.priority}
                         </span>
                       </div>
                     ) : (
-                      <span
-                        className={`block w-[8.5rem] ml-auto text-center text-[11px] px-2 py-0.5 rounded border ${priorityClass(
-                          task.priority
-                        )}`}
-                      >
+                      <span className={`block w-[8.5rem] ml-auto text-center text-[11px] px-2 py-0.5 rounded border ${priorityClass(task.priority)}`}>
                         {PRIORITY_LABELS[task.priority] ?? task.priority}
                       </span>
                     )}
                   </dd>
                 </div>
 
-                {/* Dates */}
                 <div className="flex items-center justify-between">
                   <dt className="text-gray-500">Created</dt>
                   <dd className="min-w-[12rem] text-right">
