@@ -479,6 +479,9 @@ export default function Board() {
               handleFirestoreError(e, "Couldn’t update the description.");
             }
           }}
+          onChangeTitle={async (title) => {
+            await update(projectId, detailTask.id, { title });
+          }}
         />
       )}
     </DragDropContext>

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+// src/features/board/TaskDetailModal.jsx
+import { useState, useEffect, useRef } from "react";
 import TaskChat from "../chat/TaskChat";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { Link as LinkIcon, Copy, Trash2, X, Lock, Unlock, Pencil } from "lucide-react";
@@ -51,6 +52,7 @@ export default function TaskDetailModal({
   onChangeAssignee,
   onChangePriority,
   onChangeDescription,
+  onChangeTitle, // <-- keep this wired from Board.jsx
   onClone,
 }) {
   const myUid = useAuthStore((s) => s.user?.uid);
@@ -65,24 +67,71 @@ export default function TaskDetailModal({
   const canEditAssigneePriority = isOwner && !lockedForMe;
   const canChangeStatus = (isOwner || isAssignee) && (!task.locked || isOwner);
 
-  // description editor
+  /* ---------------- Title editor ---------------- */
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(task.title || "");
+  const titleInputRef = useRef(null);
+
+  useEffect(() => {
+    setEditingTitle(false);
+    setTitleDraft(task.title || "");
+  }, [task.id, task.title]);
+
+  useEffect(() => {
+    if (editingTitle && titleInputRef.current) {
+      titleInputRef.current.focus();
+      titleInputRef.current.select();
+    }
+  }, [editingTitle]);
+
+  const saveTitle = async () => {
+    if (!isOwner || lockedForMe) return;
+    const next = (titleDraft || "").trim();
+    setEditingTitle(false); // close optimistically
+    if (next && next !== (task.title || "")) {
+      await onChangeTitle?.(next);
+    } else {
+      setTitleDraft(task.title || "");
+    }
+  };
+  const cancelTitle = () => {
+    setEditingTitle(false);
+    setTitleDraft(task.title || "");
+  };
+
+  /* ---------------- Description editor (now matches title UX) ---------------- */
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState(task.description || "");
+  const descRef = useRef(null);
+
   useEffect(() => {
     setEditingDesc(false);
     setDescDraft(task.description || "");
   }, [task.id, task.description]);
 
+  useEffect(() => {
+    if (editingDesc && descRef.current) {
+      descRef.current.focus();
+      // place caret at end
+      const el = descRef.current;
+      el.selectionStart = el.selectionEnd = el.value.length;
+    }
+  }, [editingDesc]);
+
   const saveDesc = async () => {
     if (!isOwner || lockedForMe) return;
-    await onChangeDescription?.(descDraft.trim());
-    setEditingDesc(false);
+    const next = (descDraft || "").trim();
+    setEditingDesc(false); // close optimistically
+    // allow empty string (clearing description)
+    if (next !== (task.description || "")) {
+      await onChangeDescription?.(next);
+    } else {
+      setDescDraft(task.description || "");
+    }
   };
-  const clearDesc = async () => {
-    if (!isOwner || lockedForMe) return;
-    await onChangeDescription?.("");
-    setDescDraft("");
+  const cancelDesc = () => {
     setEditingDesc(false);
+    setDescDraft(task.description || "");
   };
 
   const statusValue = normalizeStatus(task.status);
@@ -98,7 +147,7 @@ export default function TaskDetailModal({
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-      {/* Auto-shrinks with content; capped by max-h for responsiveness */}
+      {/* Container */}
       <div className="bg-white rounded-xl w-full max-w-5xl max-h-[85vh] overflow-hidden shadow flex flex-col">
         {/* Header */}
         <div className="p-3 border-b flex items-center gap-2 justify-end shrink-0">
@@ -117,20 +166,43 @@ export default function TaskDetailModal({
           <IconButton title="Close" onClick={onClose}><X size={18} /></IconButton>
         </div>
 
-        {/* Body: grid that can grow, but also shrink if little content */}
+        {/* Body */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-0 flex-1 min-h-0">
-          {/* LEFT: title, description, chat – column is a flex stack */}
+          {/* LEFT side */}
           <div className="md:col-span-2 p-5 overflow-y-auto md:overflow-hidden flex flex-col gap-4 min-h-0">
-            <div className="flex items-center justify-between shrink-0">
-              <h2 className="text-2xl font-semibold">{task.title}</h2>
-              {task.locked && (
-                <span className="ml-2 text-xs px-2 py-0.5 rounded bg-yellow-100">Locked</span>
+            {/* Title row with RIGHT edit icon */}
+            <div className="flex items-center gap-2 shrink-0">
+              {editingTitle ? (
+                <input
+                  ref={titleInputRef}
+                  className="flex-1 border rounded px-3 py-1.5 text-xl font-semibold"
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveTitle();
+                    if (e.key === "Escape") cancelTitle();
+                  }}
+                  onBlur={saveTitle}
+                />
+              ) : (
+                <div className="flex items-center gap-2">
+                  <h2 className="text-2xl font-semibold">{task.title}</h2>
+                  {task.locked && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-yellow-100">Locked</span>
+                  )}
+                </div>
+              )}
+
+              {isOwner && !lockedForMe && !editingTitle && (
+                <IconButton title="Edit title" onClick={() => setEditingTitle(true)}>
+                  <Pencil size={16} />
+                </IconButton>
               )}
             </div>
 
-            {/* Description block (natural height) */}
+            {/* Description header with RIGHT edit icon */}
             <div className="space-y-2 shrink-0">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
                 <h3 className="font-semibold">Description</h3>
                 {isOwner && !lockedForMe && !editingDesc && (
                   <IconButton
@@ -143,26 +215,18 @@ export default function TaskDetailModal({
               </div>
 
               {editingDesc ? (
-                <>
-                  <textarea
-                    className="w-full border rounded px-3 py-2 min-h-[120px]"
-                    value={descDraft}
-                    onChange={(e) => setDescDraft(e.target.value)}
-                    placeholder="Write a detailed description..."
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={saveDesc} className="px-3 py-1 rounded bg-black text-white">Save</button>
-                    <button
-                      onClick={() => { setEditingDesc(false); setDescDraft(task.description || ""); }}
-                      className="px-3 py-1 border rounded"
-                    >
-                      Cancel
-                    </button>
-                    {task.description && (
-                      <button onClick={clearDesc} className="px-3 py-1 border rounded text-red-600">Clear</button>
-                    )}
-                  </div>
-                </>
+                <textarea
+                  ref={descRef}
+                  className="w-full border rounded px-3 py-2 min-h-[120px]"
+                  value={descDraft}
+                  onChange={(e) => setDescDraft(e.target.value)}
+                  onBlur={saveDesc}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") saveDesc();
+                    if (e.key === "Escape") cancelDesc();
+                  }}
+                  placeholder="Write a detailed description..."
+                />
               ) : task.description ? (
                 <p className="whitespace-pre-wrap text-gray-700">{task.description}</p>
               ) : (
@@ -170,15 +234,13 @@ export default function TaskDetailModal({
               )}
             </div>
 
-            {/* Divider between description and chat */}
+            {/* Divider */}
             <hr className="border-t border-gray-200" />
 
-            {/* Chat area: fills the rest and sticks to the bottom */}
+            {/* Chat area */}
             <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
               <h3 className="font-semibold mb-2 shrink-0">Comments</h3>
-              {/* Scroll container */}
               <div className="flex-1 min-h-0 overflow-auto">
-                {/* This wrapper pushes the chat to the bottom of the scroll area */}
                 <div className="min-h-full flex flex-col justify-end">
                   <TaskChat
                     pid={pid}
@@ -192,7 +254,7 @@ export default function TaskDetailModal({
             </div>
           </div>
 
-          {/* RIGHT: details (independent scroll on small screens) */}
+          {/* RIGHT side */}
           <aside className="border-l p-5 space-y-4 bg-gray-50 overflow-y-auto">
             {/* Status */}
             <div>
