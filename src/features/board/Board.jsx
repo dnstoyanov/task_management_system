@@ -64,7 +64,7 @@ export default function Board() {
     } else {
       stop();
     }
-  }, [projectId, me.uid, canSeeTasks, start, stop, me]);
+  }, [projectId, me?.uid, canSeeTasks, start, stop]);
 
   // deep-link (?t=)
   useEffect(() => {
@@ -200,22 +200,14 @@ export default function Board() {
     }
   };
 
+  // Assignee OR owner can change status (owner may also reorder elsewhere)
   const changeStatus = async (status) => {
     try {
       if (!detailTask) return;
       const oldS = normalizeStatus(detailTask.status);
       const newS = normalizeStatus(status);
 
-      console.log("[ui.changeStatus]", {
-        actor: me?.uid,
-        taskId: detailTask.id,
-        currentAssignee: detailTask.assignee ?? null,
-        isOwner,
-        isMemberMe,
-        oldStatus: oldS,
-        requestedStatus: newS,
-      });
-
+      // Asignee is restricted by rules; sending only status is safe for both roles here
       await update(projectId, detailTask.id, { status });
       if (oldS !== newS) {
         await notifyStatusChange({
@@ -237,16 +229,6 @@ export default function Board() {
       if (!detailTask) return;
       const prevUid = toUid(detailTask.assignee);
       const nextUid = toUid(assignee);
-
-      console.log("[ui.changeAssignee]", {
-        actor: me?.uid,
-        taskId: detailTask.id,
-        prevAssignee: prevUid,
-        nextAssignee: nextUid,
-        isOwner,
-        isMemberMe,
-      });
-
       await update(projectId, detailTask.id, { assignee: nextUid });
       if (nextUid && nextUid !== prevUid) {
         await notifyAssignment({
@@ -266,15 +248,6 @@ export default function Board() {
       if (!detailTask) return;
       const oldP = detailTask.priority || "med";
       const newP = priority;
-
-      console.log("[ui.changePriority]", {
-        actor: me?.uid,
-        taskId: detailTask.id,
-        oldPriority: oldP,
-        requestedPriority: newP,
-        isOwner,
-      });
-
       await update(projectId, detailTask.id, { priority });
       if (oldP !== newP) {
         await notifyPriorityChange({
@@ -291,49 +264,14 @@ export default function Board() {
     }
   };
 
-  const changePriorityQuick = async (priority, id) => {
-    try {
-      const prev = tasks.find((t) => t.id === id);
-      const oldP = prev?.priority || "med";
-      console.log("[ui.changePriority.quick]", {
-        actor: me?.uid,
-        taskId: id,
-        oldPriority: oldP,
-        requestedPriority: priority,
-        isOwner,
-      });
-      await update(projectId, id, { priority });
-      if (prev && oldP !== priority) {
-        await notifyPriorityChange({
-          pid: projectId,
-          taskId: id,
-          oldPriority: oldP,
-          newPriority: priority,
-          toUids: recipients(prev.assignee),
-          byUid: me.uid,
-        });
-      }
-    } catch (e) {
-      handleFirestoreError(e, "You can’t change the priority.");
-    }
-  };
-
+  // Quick inline status change on card
   const changeStatusQuick = async (status, id) => {
     try {
       const prev = tasks.find((t) => t.id === id);
       const oldS = normalizeStatus(prev?.status);
       const newS = normalizeStatus(status);
 
-      console.log("[ui.changeStatus.quick]", {
-        actor: me?.uid,
-        taskId: id,
-        isOwner,
-        isMemberMe,
-        prevAssignee: prev?.assignee ?? null,
-        oldStatus: oldS,
-        requestedStatus: newS,
-      });
-
+      // Assignee is allowed to send ONLY status (no order)
       await update(projectId, id, { status });
       if (prev && oldS !== newS) {
         await notifyStatusChange({
@@ -349,6 +287,28 @@ export default function Board() {
       handleFirestoreError(e, "You can’t move this task.");
     }
   };
+
+  const changePriorityQuick = async (priority, id) => {
+  try {
+    const prev = tasks.find((t) => t.id === id);
+    const oldP = prev?.priority || "med";
+    const newP = priority;
+    await update(projectId, id, { priority });
+    if (prev && oldP !== newP) {
+      await notifyPriorityChange({
+        pid: projectId,
+        taskId: id,
+        oldPriority: oldP,
+        newPriority: newP,
+        toUids: recipients(prev.assignee),
+        byUid: me.uid,
+      });
+    }
+  } catch (e) {
+    handleFirestoreError(e, "You can’t change the priority.");
+  }
+};
+
 
   const changeState = async (state, id) => {
     try {
@@ -386,18 +346,21 @@ export default function Board() {
     if (!moved) return;
 
     try {
+      // Cross-column move
       if (srcCol !== dstCol) {
-        console.log("[ui.dnd.move]", {
-          actor: me?.uid,
-          taskId: moved.id,
-          from: srcCol,
-          to: dstCol,
-          isOwner,
-          isMemberMe,
-          assignee: moved.assignee ?? null,
-        });
+        const isAssignee = me?.uid && moved.assignee === me.uid;
 
-        await update(projectId, moved.id, { status: dstCol, order: Date.now() });
+        if (isOwner) {
+          // Owner can move and set order
+          await update(projectId, moved.id, { status: dstCol, order: Date.now() });
+        } else if (isAssignee && !moved.locked) {
+          // Assignee: ONLY status (no order) – matches rules
+          await update(projectId, moved.id, { status: dstCol });
+        } else {
+          notify.error("Only the owner or assignee can move this task.");
+          return;
+        }
+
         const oldS = normalizeStatus(moved.status);
         const newS = normalizeStatus(dstCol);
         if (oldS !== newS) {
@@ -410,6 +373,12 @@ export default function Board() {
             byUid: me.uid,
           });
         }
+        return;
+      }
+
+      // Inside same column re-order → OWNER ONLY
+      if (!isOwner) {
+        notify.error("Only the owner can reorder tasks.");
         return;
       }
 
@@ -469,6 +438,7 @@ export default function Board() {
                 ? changePriorityQuick(v, t.id)
                 : notify.error("Only the owner can change priority.")
             }
+
           />
         ))}
       </div>
@@ -502,8 +472,12 @@ export default function Board() {
           onChangeAssignee={changeAssignee}
           onChangePriority={changePriority}
           onChangeDescription={async (description) => {
-            try { await update(projectId, detailTask.id, { description }); notify.success("Description updated."); }
-            catch (e) { handleFirestoreError(e, "Couldn’t update the description."); }
+            try {
+              await update(projectId, detailTask.id, { description });
+              notify.success("Description updated.");
+            } catch (e) {
+              handleFirestoreError(e, "Couldn’t update the description.");
+            }
           }}
         />
       )}

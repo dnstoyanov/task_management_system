@@ -93,7 +93,6 @@ export default function TaskChat({
   const canEditOrDelete = (uid) => !!me && (uid === me.uid || isOwner);
 
   /* -------- mentions: lookup + extractors -------- */
-  // Accept both full email (@john@acme.com) and handle (@john)
   const memberLookup = useMemo(() => {
     const m = new Map();
     (members || []).forEach((u) => {
@@ -102,7 +101,7 @@ export default function TaskChat({
       if (email) m.set(email, u.id);
       if (handle) m.set(handle, u.id);
       const dn = (u.displayName || "").toLowerCase().replace(/\s+/g, "");
-      if (dn) m.set(dn, u.id); // optional: compact display name
+      if (dn) m.set(dn, u.id);
     });
     return m;
   }, [members]);
@@ -269,16 +268,16 @@ export default function TaskChat({
   }
 
   return (
-    <div className="rounded border overflow-hidden bg-white">
+    <div className="p-2 rounded border overflow-hidden bg-white">
       {/* THREAD */}
-      <div className="divide-y">
+      <div className="flex flex-col gap-3">
         {messages.map((m) => {
           const editable = canEditOrDelete(m.uid) && !disabled;
           const mEditing = editing?.type === "message" && editing.mid === m.id;
           const threadReplies = replies[m.id] || [];
 
           return (
-            <div key={m.id} className="rounded border bg-white">
+            <div key={m.id} className="rounded-lg bg-gray-100">
               <div className="flex items-start gap-3 p-3">
                 <Avatar nameOrEmail={m.author || m.uid} />
                 <div className="flex-1 min-w-0">
@@ -290,7 +289,7 @@ export default function TaskChat({
 
                     <div className="flex items-center gap-2">
                       {m.resolved && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border bg-green-50 text-green-700 border-green-200">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-green-50 text-green-700">
                           <CheckCircle2 size={14} />
                           Resolved
                         </span>
@@ -299,7 +298,7 @@ export default function TaskChat({
                         <div className="hidden sm:flex items-center gap-2">
                           {editable && !mEditing && (
                             <button
-                              className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
+                              className="text-xs px-2 py-0.5 rounded hover:bg-gray-200/60"
                               onClick={() => beginEditMessage(m)}
                             >
                               <Pencil size={14} />
@@ -307,14 +306,14 @@ export default function TaskChat({
                           )}
                           {editable && (
                             <button
-                              className="text-xs px-2 py-0.5 border rounded text-red-600 hover:bg-red-50"
+                              className="text-xs px-2 py-0.5 rounded text-red-600 hover:bg-red-100"
                               onClick={() => removeMessage(m)}
                             >
                               <Trash2 size={14} />
                             </button>
                           )}
                           <button
-                            className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
+                            className="text-xs px-2 py-0.5 rounded hover:bg-gray-200/60"
                             onClick={() => toggleResolve(m)}
                           >
                             {m.resolved ? "Reopen" : "Resolve"}
@@ -347,7 +346,9 @@ export default function TaskChat({
                       </button>
                     </div>
                   ) : (
-                    <p className="mt-2 text-sm whitespace-pre-wrap">{renderWithMentions(m.text)}</p>
+                    <p className="mt-2 text-sm whitespace-pre-wrap">
+                      {renderWithMentions(m.text)}
+                    </p>
                   )}
                 </div>
               </div>
@@ -359,7 +360,7 @@ export default function TaskChat({
                   const rEditing = editing?.type === "reply" && editing.mid === m.id && editing.rid === r.id;
 
                   return (
-                    <div key={r.id} className="rounded border bg-white">
+                    <div key={r.id} className="rounded-lg bg-white">
                       <div className="flex items-start gap-3 p-3">
                         <CornerDownRight size={16} className="mt-1 text-gray-400" />
                         <Avatar nameOrEmail={r.author || r.uid} />
@@ -372,13 +373,13 @@ export default function TaskChat({
                             {!disabled && rEditable && !rEditing && (
                               <div className="flex items-center gap-2">
                                 <button
-                                  className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
+                                  className="text-xs px-2 py-0.5 rounded hover:bg-gray-200/60"
                                   onClick={() => beginEditReply(m.id, r)}
                                 >
                                   <Pencil size={14} />
                                 </button>
                                 <button
-                                  className="text-xs px-2 py-0.5 border rounded text-red-600 hover:bg-red-50"
+                                  className="text-xs px-2 py-0.5 rounded text-red-600 hover:bg-red-100"
                                   onClick={() => removeReply(m.id, r)}
                                 >
                                   <Trash2 size={14} />
@@ -410,7 +411,9 @@ export default function TaskChat({
                               </button>
                             </div>
                           ) : (
-                            <p className="mt-2 text-sm whitespace-pre-wrap">{renderWithMentions(r.text)}</p>
+                            <p className="mt-2 text-sm whitespace-pre-wrap">
+                              {renderWithMentions(r.text)}
+                            </p>
                           )}
                         </div>
                       </div>
@@ -422,7 +425,7 @@ export default function TaskChat({
                 {!disabled && (
                   <div className="relative">
                     <input
-                      className="w-full border rounded px-3 py-2 text-sm"
+                      className="w-full border rounded-lg px-4 py-3 text-sm"
                       placeholder="Write a reply… (@email or @handle)"
                       value={draft[m.id] || ""}
                       onChange={(e) => handleDraftChange(m.id, e.target.value)}
@@ -458,45 +461,45 @@ export default function TaskChat({
       </div>
 
       {/* NEW COMMENT */}
-      <div className="p-3 border-t relative">
-        <input
-          disabled={disabled}
-          className="w-full border rounded px-3 py-2"
-          placeholder="Write a comment… (@email or @handle)"
-          value={draft.new || ""}
-          onChange={(e) => handleDraftChange("new", e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !disabled && send()}
-        />
+      <div>
+        <div className="pt-4 relative flex items-center gap-2">
+          <input
+            disabled={disabled}
+            className="flex-1 border rounded-lg px-4 py-3 text-sm"
+            placeholder="Write a comment… (@email or @handle)"
+            value={draft.new || ""}
+            onChange={(e) => handleDraftChange("new", e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !disabled && send()}
+          />
 
-        {mention.key === "new" && mentionCandidates.length > 0 && (
-          <div
-            ref={mentionBoxRef}
-            className="absolute left-3 top-full mt-1 w-56 rounded border bg-white shadow z-10"
-            onMouseDown={(e) => e.preventDefault()}
-          >
-            {mentionCandidates.map((u) => (
-              <button
-                key={u.id}
-                className="w-full text-left px-2 py-1 text-sm hover:bg-gray-50"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  insertMention("new", u.email);
-                }}
-              >
-                @{u.email}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="flex justify-end mt-2">
           <button
             disabled={disabled || !(draft.new || "").trim()}
-            className="px-3 py-2 rounded bg-indigo-600 disabled:bg-gray-200 text-white"
+            className="px-4 py-3 rounded-lg bg-indigo-600 disabled:bg-gray-300 text-white text-sm font-medium hover:bg-indigo-700 active:scale-[.98]"
             onClick={send}
           >
             Send
           </button>
+
+          {mention.key === "new" && mentionCandidates.length > 0 && (
+            <div
+              ref={mentionBoxRef}
+              className="absolute left-0 top-full mt-1 w-56 rounded border bg-white shadow z-10"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              {mentionCandidates.map((u) => (
+                <button
+                  key={u.id}
+                  className="w-full text-left px-2 py-1 text-sm hover:bg-gray-50"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    insertMention("new", u.email);
+                  }}
+                >
+                  @{u.email}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import TaskChat from "../chat/TaskChat";
 import { useAuthStore } from "../../stores/useAuthStore";
-import { Link as LinkIcon, Copy, Trash2, X, Lock, Unlock, Pencil, Bell } from "lucide-react";
+import { Link as LinkIcon, Copy, Trash2, X, Lock, Unlock, Pencil } from "lucide-react";
 import { notifyAssignment } from "../../services/notification.service";
 
 /* Status map + normalizer */
@@ -30,7 +30,7 @@ function IconButton({ title, onClick, children, className = "" }) {
       title={title}
       aria-label={title}
       onClick={onClick}
-      className={`inline-flex items-center justify-center h-8 w-8 border rounded hover:bg-gray-100 active:scale-[.98] ${className}`}
+      className={`inline-flex items-center justify-center h-8 w-8 rounded hover:bg-gray-100 active:scale-[.98] ${className}`}
     >
       {children}
     </button>
@@ -98,10 +98,10 @@ export default function TaskDetailModal({
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-      {/* Shrink if few comments; otherwise grow up to 85vh */}
-      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[85vh] overflow-hidden shadow">
+      {/* Auto-shrinks with content; capped by max-h for responsiveness */}
+      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[85vh] overflow-hidden shadow flex flex-col">
         {/* Header */}
-        <div className="p-3 border-b flex items-center gap-2 justify-end">
+        <div className="p-3 border-b flex items-center gap-2 justify-end shrink-0">
           <IconButton title="Copy link" onClick={onCopyLink}><LinkIcon size={18} /></IconButton>
           <IconButton title="Clone task" onClick={() => onClone?.()}><Copy size={18} /></IconButton>
           {isOwner && (
@@ -117,18 +117,19 @@ export default function TaskDetailModal({
           <IconButton title="Close" onClick={onClose}><X size={18} /></IconButton>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 h-[calc(85vh-56px)]">
-          {/* LEFT: title, description, comments */}
-          <div className="md:col-span-2 p-5 space-y-4 overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between">
+        {/* Body: grid that can grow, but also shrink if little content */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 flex-1 min-h-0">
+          {/* LEFT: title, description, chat – column is a flex stack */}
+          <div className="md:col-span-2 p-5 overflow-y-auto md:overflow-hidden flex flex-col gap-4 min-h-0">
+            <div className="flex items-center justify-between shrink-0">
               <h2 className="text-2xl font-semibold">{task.title}</h2>
               {task.locked && (
                 <span className="ml-2 text-xs px-2 py-0.5 rounded bg-yellow-100">Locked</span>
               )}
             </div>
 
-            {/* Description */}
-            <div className="space-y-2">
+            {/* Description block (natural height) */}
+            <div className="space-y-2 shrink-0">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold">Description</h3>
                 {isOwner && !lockedForMe && !editingDesc && (
@@ -169,20 +170,29 @@ export default function TaskDetailModal({
               )}
             </div>
 
-            {/* Chat fills remaining height */}
-            <div className="flex-1 min-h-0">
-              <h3 className="font-semibold mb-2">Comments</h3>
-              <TaskChat
-                pid={pid}
-                task={task}
-                members={members}
-                isOwner={isOwner}
-                disabled={lockedForMe}
-              />
+            {/* Divider between description and chat */}
+            <hr className="border-t border-gray-200" />
+
+            {/* Chat area: fills the rest and sticks to the bottom */}
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+              <h3 className="font-semibold mb-2 shrink-0">Comments</h3>
+              {/* Scroll container */}
+              <div className="flex-1 min-h-0 overflow-auto">
+                {/* This wrapper pushes the chat to the bottom of the scroll area */}
+                <div className="min-h-full flex flex-col justify-end">
+                  <TaskChat
+                    pid={pid}
+                    task={task}
+                    members={members}
+                    isOwner={isOwner}
+                    disabled={lockedForMe}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* RIGHT: details */}
+          {/* RIGHT: details (independent scroll on small screens) */}
           <aside className="border-l p-5 space-y-4 bg-gray-50 overflow-y-auto">
             {/* Status */}
             <div>
