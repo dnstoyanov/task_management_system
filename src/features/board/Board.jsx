@@ -11,7 +11,11 @@ import Column from "./Column";
 import { ProjectService } from "../../core/services/project.service";
 import { UserService } from "../../core/services/user.service";
 import { handleFirestoreError, notify } from "../../components/toast";
-import { notifyAssignment } from "../../services/notification.service";
+import {
+  notifyAssignment,
+  notifyStatusChange,
+  notifyPriorityChange,
+} from "../../services/notification.service";
 
 const normalizeStatus = (s) =>
   s === "todo" ? "backlog" : s === "in_progress" ? "develop" : s;
@@ -41,7 +45,11 @@ export default function Board() {
     if (!me) return;
     const unsub = ProjectService.watchOne(projectId, async (p) => {
       setProject(p);
-      if (!p) { setMembers([]); setOwnerProfile(null); return; }
+      if (!p) {
+        setMembers([]);
+        setOwnerProfile(null);
+        return;
+      }
       const profiles = await UserService.profiles(p.members || []);
       setMembers(profiles);
       setOwnerProfile(await UserService.profile(p.owner));
@@ -51,6 +59,15 @@ export default function Board() {
 
   const isOwner = !!(project && me && project.owner === me.uid);
   const isMemberMe = !!(project?.members || []).includes(me?.uid);
+
+  // recipients helper (owner + assignee, excluding actor)
+  const recipients = (assignee) => {
+    const s = new Set();
+    if (project?.owner) s.add(project.owner);
+    if (assignee) s.add(assignee);
+    if (me?.uid) s.delete(me.uid);
+    return [...s];
+  };
 
   // deep-link (?t=id)
   useEffect(() => {
@@ -65,11 +82,11 @@ export default function Board() {
   const byStatus = useMemo(() => {
     const list = tasks.map((t) => ({ ...t, status: normalizeStatus(t.status) }));
     return {
-      backlog: list.filter((t) => t.status === "backlog").sort((a,b)=> (a.order||0)-(b.order||0)),
-      analyze: list.filter((t) => t.status === "analyze").sort((a,b)=> (a.order||0)-(b.order||0)),
-      develop: list.filter((t) => t.status === "develop").sort((a,b)=> (a.order||0)-(b.order||0)),
-      testing: list.filter((t) => t.status === "testing").sort((a,b)=> (a.order||0)-(b.order||0)),
-      done:    list.filter((t) => t.status === "done").sort((a,b)=> (a.order||0)-(b.order||0)),
+      backlog: list.filter((t) => t.status === "backlog").sort((a, b) => (a.order || 0) - (b.order || 0)),
+      analyze: list.filter((t) => t.status === "analyze").sort((a, b) => (a.order || 0) - (b.order || 0)),
+      develop: list.filter((t) => t.status === "develop").sort((a, b) => (a.order || 0) - (b.order || 0)),
+      testing: list.filter((t) => t.status === "testing").sort((a, b) => (a.order || 0) - (b.order || 0)),
+      done: list.filter((t) => t.status === "done").sort((a, b) => (a.order || 0) - (b.order || 0)),
     };
   }, [tasks]);
 
@@ -101,10 +118,43 @@ export default function Board() {
   const saveForm = async (data) => {
     try {
       if (editModal?.id) {
+        const prev = tasks.find((t) => t.id === editModal.id);
         await update(projectId, editModal.id, data);
+
+        // notify on status / priority change when editing from modal
+        if (prev) {
+          const oldS = normalizeStatus(prev.status);
+          const newS = normalizeStatus(data.status ?? prev.status);
+          if (oldS !== newS) {
+            await notifyStatusChange({
+              pid: projectId,
+              taskId: prev.id,
+              oldStatus: oldS,
+              newStatus: newS,
+              toUids: recipients(prev.assignee),
+              byUid: me.uid,
+            });
+          }
+          const oldP = prev.priority || "med";
+          const newP = data.priority ?? oldP;
+          if (oldP !== newP) {
+            await notifyPriorityChange({
+              pid: projectId,
+              taskId: prev.id,
+              oldPriority: oldP,
+              newPriority: newP,
+              toUids: recipients(prev.assignee),
+              byUid: me.uid,
+            });
+          }
+        }
         notify.success("Task updated.");
       } else {
-        await create(projectId, { ...data, status: editModal.status || "backlog", order: Date.now() });
+        await create(projectId, {
+          ...data,
+          status: editModal.status || "backlog",
+          order: Date.now(),
+        });
         notify.success("Task created.");
       }
       setEditModal(null);
@@ -136,7 +186,19 @@ export default function Board() {
   const changeStatus = async (status) => {
     try {
       if (!detailTask) return;
+      const oldS = normalizeStatus(detailTask.status);
+      const newS = normalizeStatus(status);
       await update(projectId, detailTask.id, { status });
+      if (oldS !== newS) {
+        await notifyStatusChange({
+          pid: projectId,
+          taskId: detailTask.id,
+          oldStatus: oldS,
+          newStatus: newS,
+          toUids: recipients(detailTask.assignee),
+          byUid: me.uid,
+        });
+      }
     } catch (e) {
       handleFirestoreError(e, "You can’t change the status.");
     }
@@ -148,13 +210,13 @@ export default function Board() {
       const prev = detailTask.assignee || null;
       const next = assignee || null;
       await update(projectId, detailTask.id, { assignee: next });
-      // fire assignment notification when changed and not self
       if (next && next !== prev && me?.uid) {
-        try {
-          await notifyAssignment({ pid: projectId, taskId: detailTask.id, toUid: next, byUid: me.uid });
-        } catch (err) {
-          console.warn("[notifyAssignment] failed:", err?.code || err?.message || err);
-        }
+        await notifyAssignment({
+          pid: projectId,
+          taskId: detailTask.id,
+          toUid: next,
+          byUid: me.uid,
+        });
       }
     } catch (e) {
       handleFirestoreError(e, "You can’t change the assignee.");
@@ -164,7 +226,19 @@ export default function Board() {
   const changePriority = async (priority) => {
     try {
       if (!detailTask) return;
+      const oldP = detailTask.priority || "med";
+      const newP = priority;
       await update(projectId, detailTask.id, { priority });
+      if (oldP !== newP) {
+        await notifyPriorityChange({
+          pid: projectId,
+          taskId: detailTask.id,
+          oldPriority: oldP,
+          newPriority: newP,
+          toUids: recipients(detailTask.assignee),
+          byUid: me.uid,
+        });
+      }
     } catch (e) {
       handleFirestoreError(e, "You can’t change the priority.");
     }
@@ -182,29 +256,69 @@ export default function Board() {
 
   const canChangePriority = (t) => !t.locked && isOwner;
   const canChangeStatus = (t) => !t.locked && (isOwner || me?.uid === t.assignee);
-  const canChangeState  = (t) => !t.locked && isOwner;
+  const canChangeState = (t) => !t.locked && isOwner;
 
   const changePriorityQuick = async (priority, id) => {
-    try { await update(projectId, id, { priority }); }
-    catch (e) { handleFirestoreError(e, "You can’t change the priority."); }
+    try {
+      const prev = tasks.find((t) => t.id === id);
+      const oldP = prev?.priority || "med";
+      await update(projectId, id, { priority });
+      if (prev && oldP !== priority) {
+        await notifyPriorityChange({
+          pid: projectId,
+          taskId: id,
+          oldPriority: oldP,
+          newPriority: priority,
+          toUids: recipients(prev.assignee),
+          byUid: me.uid,
+        });
+      }
+    } catch (e) {
+      handleFirestoreError(e, "You can’t change the priority.");
+    }
   };
+
   const changeStatusQuick = async (status, id) => {
-    try { await update(projectId, id, { status }); }
-    catch (e) { handleFirestoreError(e, "You can’t move this task."); }
+    try {
+      const prev = tasks.find((t) => t.id === id);
+      const oldS = normalizeStatus(prev?.status);
+      const newS = normalizeStatus(status);
+      await update(projectId, id, { status });
+      if (prev && oldS !== newS) {
+        await notifyStatusChange({
+          pid: projectId,
+          taskId: id,
+          oldStatus: oldS,
+          newStatus: newS,
+          toUids: recipients(prev.assignee),
+          byUid: me.uid,
+        });
+      }
+    } catch (e) {
+      handleFirestoreError(e, "You can’t move this task.");
+    }
   };
+
   const changeState = async (state, id) => {
-    try { await update(projectId, id, { state }); }
-    catch (e) { handleFirestoreError(e, "You can’t change the state."); }
+    try {
+      await update(projectId, id, { state });
+    } catch (e) {
+      handleFirestoreError(e, "You can’t change the state.");
+    }
   };
 
   const copyLink = async () => {
     if (!detailTask) return;
     const url = `${window.location.origin}/p/${projectId}?t=${detailTask.id}`;
-    try { await navigator.clipboard.writeText(url); notify.success("Link copied."); }
-    catch { notify.info(url); }
+    try {
+      await navigator.clipboard.writeText(url);
+      notify.success("Link copied.");
+    } catch {
+      notify.info(url);
+    }
   };
 
-  // ---- DND: the missing provider fix ----
+  // ---- DND ----
   async function onDragEnd(result) {
     const { destination, source, draggableId } = result;
     if (!destination) return;
@@ -214,32 +328,38 @@ export default function Board() {
     const srcIdx = source.index;
     const dstIdx = destination.index;
 
-    // same place
     if (srcCol === dstCol && srcIdx === dstIdx) return;
 
-    // Find moved task
     const moved =
       (byStatus[srcCol] || []).find((t, i) => i === srcIdx) ||
       tasks.find((t) => t.id === draggableId);
     if (!moved) return;
 
     try {
-      // Move across columns
       if (srcCol !== dstCol) {
-        // quick move with new status + place at top by order timestamp
         await update(projectId, moved.id, {
           status: dstCol,
           order: Date.now(),
         });
+        const oldS = normalizeStatus(moved.status);
+        const newS = normalizeStatus(dstCol);
+        if (oldS !== newS) {
+          await notifyStatusChange({
+            pid: projectId,
+            taskId: moved.id,
+            oldStatus: oldS,
+            newStatus: newS,
+            toUids: recipients(moved.assignee),
+            byUid: me.uid,
+          });
+        }
         return;
       }
 
-      // Reorder within the same column: rebuild orders
       const col = [...(byStatus[srcCol] || [])];
       const [item] = col.splice(srcIdx, 1);
       col.splice(dstIdx, 0, item);
 
-      // persist simple sequential order (1..n)
       await Promise.all(
         col.map((t, i) =>
           update(projectId, t.id, { order: i + 1 }).catch((e) => {
@@ -258,11 +378,11 @@ export default function Board() {
     <DragDropContext onDragEnd={onDragEnd}>
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         {[
-          ["Backlog",  "backlog",  byStatus.backlog],
-          ["Analyze",  "analyze",  byStatus.analyze],
-          ["Develop",  "develop",  byStatus.develop],
-          ["Testing",  "testing",  byStatus.testing],
-          ["Done",     "done",     byStatus.done],
+          ["Backlog", "backlog", byStatus.backlog],
+          ["Analyze", "analyze", byStatus.analyze],
+          ["Develop", "develop", byStatus.develop],
+          ["Testing", "testing", byStatus.testing],
+          ["Done", "done", byStatus.done],
         ].map(([title, key, list]) => (
           <Column
             key={key}
@@ -277,13 +397,19 @@ export default function Board() {
             onOpen={openDetail}
             onDelete={deleteTask}
             onChangeState={(t, v) =>
-              canChangeState(t) ? changeState(v, t.id) : notify.error("Only the owner can change state.")
+              canChangeState(t)
+                ? changeState(v, t.id)
+                : notify.error("Only the owner can change state.")
             }
             onChangeStatus={(t, v) =>
-              canChangeStatus(t) ? changeStatusQuick(v, t.id) : notify.error("Only the owner or assignee can change status.")
+              canChangeStatus(t)
+                ? changeStatusQuick(v, t.id)
+                : notify.error("Only the owner or assignee can change status.")
             }
             onChangePriority={(t, v) =>
-              canChangePriority(t) ? changePriorityQuick(v, t.id) : notify.error("Only the owner can change priority.")
+              canChangePriority(t)
+                ? changePriorityQuick(v, t.id)
+                : notify.error("Only the owner can change priority.")
             }
           />
         ))}
@@ -291,7 +417,11 @@ export default function Board() {
 
       {editModal && (
         <TaskModal
-          initial={editModal.id ? editModal : { status: editModal.status || "backlog", state: "new" }}
+          initial={
+            editModal.id
+              ? editModal
+              : { status: editModal.status || "backlog", state: "new" }
+          }
           members={members}
           onSave={saveForm}
           onClose={() => setEditModal(null)}

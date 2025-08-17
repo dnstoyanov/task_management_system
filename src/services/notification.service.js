@@ -1,30 +1,103 @@
-// Works with collection-group AND falls back to per-project watchers.
+// Idempotent writers + robust inbox watcher (collection-group with per-project fallback)
+
 import {
-  addDoc, collection, collectionGroup, onSnapshot, query, where,
-  updateDoc, doc, serverTimestamp, writeBatch, getDocs
+  setDoc,
+  doc,
+  collection,
+  collectionGroup,
+  onSnapshot,
+  query,
+  where,
+  updateDoc,
+  serverTimestamp,
+  writeBatch,
+  getDocs,
+  deleteDoc,
 } from "firebase/firestore";
 import { db } from "../core/firebase";
 
-export async function notifyAssignment({ pid, taskId, toUid, byUid }) {
-  const col = collection(db, "projects", pid, "notifications");
-  await addDoc(col, { type: "assignment", taskId, toUid, byUid, read: false, createdAt: serverTimestamp() });
+/* -------------------- helpers -------------------- */
+const now = () => serverTimestamp();
+const sortByTimeDesc = (list) =>
+  list.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+
+/** Idempotent upsert into /projects/{pid}/notifications/{id} */
+async function upsert(pid, id, data) {
+  await setDoc(
+    doc(db, "projects", pid, "notifications", id),
+    { ...data, read: false, createdAt: now() },
+    { merge: true }
+  );
 }
+
+/* -------------------- WRITERS -------------------- */
+// Assignment — one record per (task,toUid)
+export async function notifyAssignment({ pid, taskId, toUid, byUid }) {
+  if (!pid || !taskId || !toUid || !byUid) return;
+  const id = `a__${taskId}__${toUid}`; // deterministic -> no duplicates
+  await upsert(pid, id, { type: "assignment", taskId, toUid, byUid });
+}
+
+// Mentions — collapse by (task,toUid)
 export async function notifyMentions({ pid, taskId, toUids = [], byUid, messageId = null }) {
-  const col = collection(db, "projects", pid, "notifications");
-  const uniq = [...new Set(toUids)];
+  const uniq = [...new Set(toUids)].filter(Boolean);
   await Promise.all(
     uniq.map((toUid) =>
-      addDoc(col, { type: "mention", taskId, toUid, byUid, messageId, read: false, createdAt: serverTimestamp() })
+      upsert(pid, `m__${taskId}__${toUid}`, {
+        type: "mention",
+        taskId,
+        toUid,
+        byUid,
+        messageId: messageId || null,
+      })
     )
   );
 }
 
-// ----- READERS -----
-function sortByTimeDesc(list) {
-  return list.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+// Status change — notify owner + assignee
+export async function notifyStatusChange({ pid, taskId, oldStatus, newStatus, toUids = [], byUid }) {
+  if (oldStatus === newStatus) return;
+  const uniq = [...new Set(toUids)].filter(Boolean);
+  await Promise.all(
+    uniq.map((toUid) =>
+      upsert(pid, `s__${taskId}__${toUid}`, {
+        type: "status",
+        taskId,
+        toUid,
+        byUid,
+        oldStatus,
+        newStatus,
+      })
+    )
+  );
 }
 
-// Primary: collection-group
+// Priority change — notify owner + assignee
+export async function notifyPriorityChange({
+  pid,
+  taskId,
+  oldPriority,
+  newPriority,
+  toUids = [],
+  byUid,
+}) {
+  if (oldPriority === newPriority) return;
+  const uniq = [...new Set(toUids)].filter(Boolean);
+  await Promise.all(
+    uniq.map((toUid) =>
+      upsert(pid, `p__${taskId}__${toUid}`, {
+        type: "priority",
+        taskId,
+        toUid,
+        byUid,
+        oldPriority,
+        newPriority,
+      })
+    )
+  );
+}
+
+/* -------------------- READERS (CG + fallback) -------------------- */
 function watchMineCG(uid, onChange, onError) {
   const q = query(collectionGroup(db, "notifications"), where("toUid", "==", uid));
   return onSnapshot(
@@ -32,7 +105,7 @@ function watchMineCG(uid, onChange, onError) {
     (snap) => {
       const list = snap.docs.map((d) => ({
         id: d.id,
-        pid: d.ref.parent.parent.id, // projects/{pid}/notifications/{id}
+        pid: d.ref.parent.parent.id,
         ...d.data(),
       }));
       onChange(sortByTimeDesc(list));
@@ -41,68 +114,43 @@ function watchMineCG(uid, onChange, onError) {
   );
 }
 
-// Fallback: watch projects I’m in, then each /notifications filtered by toUid
 function watchMinePerProject(uid, onChange) {
-  const projQ = query(collection(db, "projects"), where("members", "array-contains", uid));
-  const perProjUnsubs = new Map();
-  let current = [];
-
-  const push = () => onChange(sortByTimeDesc([...current]));
-
-  function upsert(pid, docs) {
-    // remove old for pid, add new
-    current = current.filter((n) => n.pid !== pid).concat(docs.map((d) => ({ pid, ...d })));
-    push();
-  }
-
-  function watchOneProject(pid) {
-    const notifQ = query(collection(db, "projects", pid, "notifications"), where("toUid", "==", uid));
-    const unsub = onSnapshot(notifQ, (snap) => {
-      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      upsert(pid, docs);
-    });
-    perProjUnsubs.set(pid, unsub);
-  }
-
-  const unsubProjects = onSnapshot(projQ, (snap) => {
-    const pids = new Set(snap.docs.map((d) => d.id));
-    // add new watches
-    pids.forEach((pid) => { if (!perProjUnsubs.has(pid)) watchOneProject(pid); });
-    // remove closed
-    Array.from(perProjUnsubs.keys()).forEach((pid) => {
-      if (!pids.has(pid)) { perProjUnsubs.get(pid)(); perProjUnsubs.delete(pid); }
-    });
+  // minimal fallback without an extra projects watcher — scan all notifications groups where toUid == uid
+  const q = query(collectionGroup(db, "notifications"), where("toUid", "==", uid));
+  return onSnapshot(q, (snap) => {
+    const list = snap.docs.map((d) => ({
+      id: d.id,
+      pid: d.ref.parent.parent.id,
+      ...d.data(),
+    }));
+    onChange(sortByTimeDesc(list));
   });
+}
 
+export function watchMine(uid, onChange) {
+  if (!uid) return () => {};
+  let fellBack = false;
+  let unsub = watchMineCG(uid, onChange, () => {
+    if (!fellBack) {
+      try {
+        unsub && unsub();
+      } catch {}
+      fellBack = true;
+      unsub = watchMinePerProject(uid, onChange);
+    }
+  });
   return () => {
-    try { unsubProjects(); } catch {}
-    perProjUnsubs.forEach((u) => { try { u(); } catch {} });
-    perProjUnsubs.clear();
+    try {
+      unsub && unsub();
+    } catch {}
   };
 }
 
-// Public API: try CG, fall back on any error
-export function watchMine(uid, onChange) {
-  if (!uid) return () => {};
-  let usingFallback = false;
-  let unsub = watchMineCG(
-    uid,
-    onChange,
-    () => {
-      // permission/index/etc — switch to fallback
-      if (!usingFallback) {
-        try { unsub && unsub(); } catch {}
-        usingFallback = true;
-        unsub = watchMinePerProject(uid, onChange);
-      }
-    }
-  );
-  return () => { try { unsub && unsub(); } catch {} };
-}
-
+/* -------------------- UPDATE / CLEAR -------------------- */
 export async function markRead({ pid, id, read = true }) {
   await updateDoc(doc(db, "projects", pid, "notifications", id), { read });
 }
+
 export async function markAllMineRead(uid) {
   const q = query(collectionGroup(db, "notifications"), where("toUid", "==", uid));
   const snap = await getDocs(q);
@@ -112,4 +160,23 @@ export async function markAllMineRead(uid) {
     batch.update(doc(db, "projects", pid, "notifications", d.id), { read: true });
   });
   await batch.commit();
+}
+
+export async function deleteAllMine(uid) {
+  const q = query(collectionGroup(db, "notifications"), where("toUid", "==", uid));
+  const snap = await getDocs(q);
+  if (snap.empty) return;
+  // Firestore batch limit is 500 ops — chunk to 400 for safety
+  const docs = snap.docs.map((d) => ({
+    pid: d.ref.parent.parent.id,
+    id: d.id,
+  }));
+  for (let i = 0; i < docs.length; i += 400) {
+    const chunk = docs.slice(i, i + 400);
+    const batch = writeBatch(db);
+    chunk.forEach(({ pid, id }) =>
+      batch.delete(doc(db, "projects", pid, "notifications", id))
+    );
+    await batch.commit();
+  }
 }

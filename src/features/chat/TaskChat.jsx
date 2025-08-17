@@ -1,3 +1,4 @@
+// src/features/chat/TaskChat.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
@@ -43,7 +44,7 @@ function renderWithMentions(text) {
 export default function TaskChat({
   pid,
   task,
-  members = [],    // [{id, displayName, email}]
+  members = [], // [{id, displayName, email}]
   disabled = false,
   isOwner = false,
 }) {
@@ -52,7 +53,7 @@ export default function TaskChat({
   // --- data
   const [messages, setMessages] = useState([]);
   const [replies, setReplies] = useState({}); // {mid: []}
-  const [draft, setDraft] = useState({});     // {mid or 'new': text}
+  const [draft, setDraft] = useState({}); // {mid or 'new': text}
   const [editing, setEditing] = useState(null); // {type:'message'|'reply', mid, rid?}
   const [editText, setEditText] = useState("");
 
@@ -77,13 +78,11 @@ export default function TaskChat({
   // watch replies per message
   useEffect(() => {
     const unsubs = [];
-    const next = {};
     messages.forEach((m) => {
       const rCol = collection(db, "projects", pid, "tasks", task.id, "messages", m.id, "replies");
       const u = onSnapshot(query(rCol, orderBy("createdAt", "asc")), (snap) => {
-        next[m.id] = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        // keep other message replies
-        setReplies((curr) => ({ ...curr, [m.id]: next[m.id] }));
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setReplies((curr) => ({ ...curr, [m.id]: list }));
       });
       unsubs.push(u);
     });
@@ -93,21 +92,48 @@ export default function TaskChat({
   /* permissions */
   const canEditOrDelete = (uid) => !!me && (uid === me.uid || isOwner);
 
-  /* mentions helpers */
-  const memberIndexByEmail = useMemo(() => {
-    const map = {};
-    members.forEach((m) => {
-      const e = (m.email || "").toLowerCase();
-      if (e) map[e] = m.id;
+  /* -------- mentions: lookup + extractors -------- */
+  // Accept both full email (@john@acme.com) and handle (@john)
+  const memberLookup = useMemo(() => {
+    const m = new Map();
+    (members || []).forEach((u) => {
+      const email = (u.email || "").toLowerCase();
+      const handle = email.split("@")[0];
+      if (email) m.set(email, u.id);
+      if (handle) m.set(handle, u.id);
+      const dn = (u.displayName || "").toLowerCase().replace(/\s+/g, "");
+      if (dn) m.set(dn, u.id); // optional: compact display name
     });
-    return map;
+    return m;
   }, [members]);
+
+  function mentionedUidsFrom(text) {
+    const ids = new Set();
+
+    // @email
+    for (const m of text.matchAll(/@([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,})/g)) {
+      const key = m[1].toLowerCase();
+      if (memberLookup.has(key)) ids.add(memberLookup.get(key));
+    }
+    // @handle
+    for (const m of text.matchAll(/@([A-Za-z0-9._-]+)/g)) {
+      const key = m[1].toLowerCase();
+      if (memberLookup.has(key)) ids.add(memberLookup.get(key));
+    }
+
+    if (ids.has(me?.uid)) ids.delete(me.uid); // no self-mentions
+    return [...ids];
+  }
 
   const mentionCandidates = useMemo(() => {
     const q = (mention.query || "").toLowerCase();
     if (!mention.key || !q) return [];
     return members
-      .filter((m) => (m.email || "").toLowerCase().includes(q) || (m.displayName || "").toLowerCase().includes(q))
+      .filter(
+        (m) =>
+          (m.email || "").toLowerCase().includes(q) ||
+          (m.displayName || "").toLowerCase().replace(/\s+/g, "").includes(q)
+      )
       .slice(0, 6);
   }, [mention, members]);
 
@@ -125,15 +151,6 @@ export default function TaskChat({
       return { ...d, [key]: newV };
     });
     setMention({ key: null, query: "" });
-  }
-
-  function mentionedUidsFrom(text) {
-    const tokens = Array.from(text.matchAll(/@([^\s@]+)/g)).map((m) => m[1].toLowerCase());
-    const toUids = tokens
-      .map((email) => memberIndexByEmail[email])
-      .filter(Boolean);
-    // unique
-    return Array.from(new Set(toUids));
   }
 
   /* ---------- CRUD ---------- */
@@ -154,7 +171,7 @@ export default function TaskChat({
       // notifications for mentions
       const toUids = mentionedUidsFrom(t);
       if (toUids.length) {
-        await notifyMentions({ pid, taskId: task.id, toUids, byUid: me.uid });
+        await notifyMentions({ pid, taskId: task.id, toUids, byUid: me.uid, messageId: ref.id });
       }
 
       setDraft((d) => ({ ...d, new: "" }));
@@ -216,9 +233,10 @@ export default function TaskChat({
           text: editText,
         });
       } else if (editing?.type === "reply") {
-        await updateDoc(doc(db, "projects", pid, "tasks", task.id, "messages", editing.mid, "replies", editing.rid), {
-          text: editText,
-        });
+        await updateDoc(
+          doc(db, "projects", pid, "tasks", task.id, "messages", editing.mid, "replies", editing.rid),
+          { text: editText }
+        );
       }
       setEditing(null);
       setEditText("");
@@ -280,19 +298,25 @@ export default function TaskChat({
                       {!disabled && (
                         <div className="hidden sm:flex items-center gap-2">
                           {editable && !mEditing && (
-                            <button className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
-                              onClick={() => beginEditMessage(m)}>
+                            <button
+                              className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
+                              onClick={() => beginEditMessage(m)}
+                            >
                               <Pencil size={14} />
                             </button>
                           )}
                           {editable && (
-                            <button className="text-xs px-2 py-0.5 border rounded text-red-600 hover:bg-red-50"
-                              onClick={() => removeMessage(m)}>
+                            <button
+                              className="text-xs px-2 py-0.5 border rounded text-red-600 hover:bg-red-50"
+                              onClick={() => removeMessage(m)}
+                            >
                               <Trash2 size={14} />
                             </button>
                           )}
-                          <button className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
-                            onClick={() => toggleResolve(m)}>
+                          <button
+                            className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
+                            onClick={() => toggleResolve(m)}
+                          >
                             {m.resolved ? "Reopen" : "Resolve"}
                           </button>
                         </div>
@@ -309,8 +333,18 @@ export default function TaskChat({
                         onKeyDown={(e) => e.key === "Enter" && saveEdit()}
                         autoFocus
                       />
-                      <button className="px-3 py-2 rounded bg-black text-white" onClick={saveEdit}>Save</button>
-                      <button className="px-3 py-2 rounded border" onClick={() => { setEditing(null); setEditText(""); }}>Cancel</button>
+                      <button className="px-3 py-2 rounded bg-black text-white" onClick={saveEdit}>
+                        Save
+                      </button>
+                      <button
+                        className="px-3 py-2 rounded border"
+                        onClick={() => {
+                          setEditing(null);
+                          setEditText("");
+                        }}
+                      >
+                        Cancel
+                      </button>
                     </div>
                   ) : (
                     <p className="mt-2 text-sm whitespace-pre-wrap">{renderWithMentions(m.text)}</p>
@@ -337,12 +371,16 @@ export default function TaskChat({
                             </div>
                             {!disabled && rEditable && !rEditing && (
                               <div className="flex items-center gap-2">
-                                <button className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
-                                  onClick={() => beginEditReply(m.id, r)}>
+                                <button
+                                  className="text-xs px-2 py-0.5 border rounded hover:bg-gray-50"
+                                  onClick={() => beginEditReply(m.id, r)}
+                                >
                                   <Pencil size={14} />
                                 </button>
-                                <button className="text-xs px-2 py-0.5 border rounded text-red-600 hover:bg-red-50"
-                                  onClick={() => removeReply(m.id, r)}>
+                                <button
+                                  className="text-xs px-2 py-0.5 border rounded text-red-600 hover:bg-red-50"
+                                  onClick={() => removeReply(m.id, r)}
+                                >
                                   <Trash2 size={14} />
                                 </button>
                               </div>
@@ -358,8 +396,18 @@ export default function TaskChat({
                                 onKeyDown={(e) => e.key === "Enter" && saveEdit()}
                                 autoFocus
                               />
-                              <button className="px-3 py-2 rounded bg-black text-white" onClick={saveEdit}>Save</button>
-                              <button className="px-3 py-2 rounded border" onClick={() => { setEditing(null); setEditText(""); }}>Cancel</button>
+                              <button className="px-3 py-2 rounded bg-black text-white" onClick={saveEdit}>
+                                Save
+                              </button>
+                              <button
+                                className="px-3 py-2 rounded border"
+                                onClick={() => {
+                                  setEditing(null);
+                                  setEditText("");
+                                }}
+                              >
+                                Cancel
+                              </button>
                             </div>
                           ) : (
                             <p className="mt-2 text-sm whitespace-pre-wrap">{renderWithMentions(r.text)}</p>
@@ -375,7 +423,7 @@ export default function TaskChat({
                   <div className="relative">
                     <input
                       className="w-full border rounded px-3 py-2 text-sm"
-                      placeholder="Write a reply… (@name to mention)"
+                      placeholder="Write a reply… (@email or @handle)"
                       value={draft[m.id] || ""}
                       onChange={(e) => handleDraftChange(m.id, e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && sendReply(m.id)}
@@ -391,7 +439,10 @@ export default function TaskChat({
                           <button
                             key={u.id}
                             className="w-full text-left px-2 py-1 text-sm hover:bg-gray-50"
-                            onMouseDown={(e) => { e.preventDefault(); insertMention(m.id, u.email); }}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              insertMention(m.id, u.email);
+                            }}
                           >
                             @{u.email}
                           </button>
@@ -411,7 +462,7 @@ export default function TaskChat({
         <input
           disabled={disabled}
           className="w-full border rounded px-3 py-2"
-          placeholder="Write a comment… (@name to mention)"
+          placeholder="Write a comment… (@email or @handle)"
           value={draft.new || ""}
           onChange={(e) => handleDraftChange("new", e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !disabled && send()}
@@ -427,7 +478,10 @@ export default function TaskChat({
               <button
                 key={u.id}
                 className="w-full text-left px-2 py-1 text-sm hover:bg-gray-50"
-                onMouseDown={(e) => { e.preventDefault(); insertMention("new", u.email); }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertMention("new", u.email);
+                }}
               >
                 @{u.email}
               </button>
